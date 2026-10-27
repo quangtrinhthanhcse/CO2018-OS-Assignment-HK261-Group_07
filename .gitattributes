@@ -1,0 +1,8 @@
+* text=auto eol=lf
+*.sh text eol=lf
+Makefile text eol=lf
+*.mk text eol=lf
+*.tbl text eol=lf
+hk261_ossim_demacOprx/input/** text eol=lf
+hk261_ossim_demacOprx/output/** text eol=lf
+*.pdf binary

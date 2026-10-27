@@ -1,0 +1,16 @@
+# Build outputs
+**/obj/
+*.o
+*.d
+hk261_ossim_demacOprx/os
+hk261_ossim_demacOprx/sched
+hk261_ossim_demacOprx/mem
+hk261_ossim_demacOprx/pdg
+hk261_ossim_demacOprx/dma_testbench
+hk261_ossim_demacOprx/src/*.lst
+*.vcd
+
+# OS / Editor junk
+.DS_Store
+Thumbs.db
+.vscode/
