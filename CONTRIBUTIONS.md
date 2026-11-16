@@ -6,40 +6,24 @@
 
 ---
 
-## 1. Các Mốc Tiến Độ Quan Trọng (Project Milestones)
-
-Dự án được thực hiện trong 3 tuần (từ **02/11/2026** đến **22/11/2026**):
-
-| Mốc | Thời gian | Nội dung công việc & Mục tiêu bàn giao | Phụ trách chính |
-| :---: | :---: | :--- | :--- |
-| **MỐC 1 (Thầy kiểm tra)** | **Thứ Ba, 03/11/2026** | • Báo cáo phân công 5 thành viên và danh sách nhánh Git `feat/*`.<br>• Xác nhận môi trường build `make all` chạy thông suốt trên Ubuntu.<br>• Bản phác thảo biểu đồ Gantt tiến độ nhóm. | Cả nhóm (A1/B1 chủ trì khung báo cáo & Gantt nháp) |
-| **Merge Feat 1** | **Chủ Nhật, 08/11/2026** | Hoàn thành và merge `feat/scheduler` (Queue & MLQ Scheduler). Pass test `sched*`. | Nguyễn Khắc Triệu |
-| **Merge Feat 3** | **Thứ Ba, 10/11/2026** | Hoàn thành và merge `feat/mm64-memphy` (Phân trang 64-bit 5 cấp & RAM). Pass test `os_0*`. | Trịnh Thanh Quang |
-| **Merge Feat 2** | **Thứ Tư, 11/11/2026** | Hoàn thành và merge `feat/syscall-mmvm` (Syscall memmap & MM-VM). Pass test `os_sc*`. | Phạm Huỳnh Trọng Trí |
-| **Merge Feat 4** | **Thứ Sáu, 13/11/2026** | Hoàn thành và merge `feat/libmem` (User/Kernel mem & FIFO swap). Pass test `os_1*`. | Đặng Hồng Anh |
-| **Merge Feat 5** | **Chủ Nhật, 15/11/2026** | Hoàn thành và merge `feat/dma-coproc` (DMA hardware testbench & Bus). Pass test `os_2*`. | Trần Khan |
-| **MỐC 2 (Thầy kiểm tra)** | **Thứ Ba, 17/11/2026** | Kiểm tra tiến độ lần 2 với Giảng viên: Báo cáo tích hợp toàn hệ thống. | Cả nhóm |
-| **NỘP BÀI CUỐI CÙNG** | **Chủ Nhật, 22/11/2026** | Hoàn thiện Báo cáo tổng hợp, rà soát chuẩn GNU C, đóng gói `assignment_STUDENTID.zip`. | Trần Khan (B5 đóng gói, cả nhóm duyệt) |
-
----
-
-## 2. Bảng Phân Công Nhiệm Vụ Thành Viên
+## 1. Bảng Phân Công Nhiệm Vụ Thành Viên
 
 > *Nguyên tắc làm việc:* 
 > 1. Mỗi thành viên chọn 1 việc **Phần A** (code mã nguồn trên một nhánh `feat/*`) và đúng việc **Phần B** cùng số (viết báo cáo và chuẩn bị vấn đáp tương ứng).
 > 2. Mỗi module đều có một **Buddy** (người hỗ trợ/dự phòng). Buddy phải đọc hiểu code của owner để đảm bảo không ai là điểm nghẽn duy nhất và cả hai đều tự tin trả lời vấn đáp.
 
 | STT | Họ và Tên | MSSV | Email | Nhiệm vụ Code (Phần A) | Buddy (Dự phòng) | Hạn Merge vào `main` | Trách nhiệm Báo cáo (Phần B) & Tích hợp |
-| :-: | :--- | :---: | :--- | :--- | :---: | :---: | :--- |
-| **1** | **Nguyễn Khắc Triệu** | 2213619 | `trieu.nguyenkhac@hcmut.edu.vn` | **A1:** `feat/scheduler`<br>(MLQ Scheduler & Queue) | Trần Khan<br>(A5) | **08/11/2026** | **B1:** Vẽ Gantt, trả lời Q3; **Khởi tạo khung Báo cáo nhóm**; Điều phối tích hợp & script auto-test. |
-| **2** | **Phạm Huỳnh Trọng Trí** | 2213657 | `tri.phamhuynhtrong@hcmut.edu.vn` | **A2:** `feat/syscall-mmvm`<br>(Syscall memmap & MM-VM) | Trịnh Thanh Quang<br>(A3) | **11/11/2026** | **B2:** Sơ đồ luồng syscall, cơ chế PID Passing, trả lời Q1 & Q2. |
-| **3** | **Trịnh Thanh Quang** | 2412862 | `quang.trinhthanhcse@hcmut.edu.vn` | **A3:** `feat/mm64-memphy`<br>(RAM/SWAP & Phân trang 5 cấp) | Phạm Huỳnh Trọng Trí<br>(A2) | **10/11/2026** | **B3:** Sơ đồ phân trang 5 cấp, thống kê truy cập/dung lượng bảng trang, trả lời Q4, Q5 & Q6. |
-| **4** | **Đặng Hồng Anh** | 2410060 | `anh.dang2502@hcmut.edu.vn` | **A4:** `feat/libmem`<br>(libmem user-space & FIFO swap) | Trịnh Thanh Quang<br>(A3) | **13/11/2026** | **B4:** Sơ đồ trạng thái Data Segment, ví dụ swap thực tế, trả lời Q7 (Đồng bộ hóa). |
-| **5** | **Trần Khan** | 2510102 | `khan.tran1507@hcmut.edu.vn` | **A5:** `feat/dma-coproc`<br>(Kernel mem & DMA Verilator) | Nguyễn Khắc Triệu<br>(A1) | **15/11/2026** | **B5:** Giải thích cơ chế bất đồng bộ DMA, định địa chỉ Bus; **Đóng gói file nộp bài**. |
+| :-: | :--- | :---: | :--- | :--- | :--- | :---: | :--- |
+| **1** | **Nguyễn Khắc Triệu** | 2213619 | `trieu.nguyenkhac@hcmut.edu.vn` | **A1:** `feat/scheduler`<br>(MLQ Scheduler & Queue) | Trần Khan<br>(A6) | **15/11/2026** | **B1:** Vẽ Gantt, trả lời Q3; **Khởi tạo khung Báo cáo nhóm**; Điều phối tích hợp & script auto-test. |
+| **2** | **Phạm Huỳnh Trọng Trí** | 2213657 | `tri.phamhuynhtrong@hcmut.edu.vn` | **A2:** `feat/syscall-mmvm`<br>(Syscall memmap & MM-VM) | Trịnh Thanh Quang<br>(A3) | **18/11/2026** | **B2:** Sơ đồ luồng syscall, cơ chế PID Passing, trả lời Q1 & Q2. |
+| **3** | **Trịnh Thanh Quang** | 2412862 | `quang.trinhthanhcse@hcmut.edu.vn` | **A3:** `feat/mm64-memphy`<br>(RAM/SWAP & Phân trang 5 cấp) | Phạm Huỳnh Trọng Trí<br>(A2) | **17/11/2026** | **B3:** Sơ đồ phân trang 5 cấp, thống kê truy cập/dung lượng bảng trang, trả lời Q4, Q5 & Q6. |
+| **4** | **Đặng Hồng Anh** | 2410060 | `anh.dang2502@hcmut.edu.vn` | **A4:** `feat/libmem`<br>(libmem user-space & FIFO swap) | Nguyễn Hoàng Quốc Mạnh<br>(A5) | **20/11/2026** | **B4:** Sơ đồ trạng thái Data Segment, ví dụ swap thực tế, trả lời Q7 (Đồng bộ hóa). |
+| **5** | **Nguyễn Hoàng Quốc Mạnh** | 2111721 | `manh.nguyenrynaster01@hcmut.edu.vn` | **A5:** `feat/kmem`<br>(Kernel mem & copy user/kernel) | Đặng Hồng Anh<br>(A4) | **21/11/2026** | **B5:** Phân tách không gian user/kernel, cấp phát kmem, copy user/kernel. |
+| **6** | **Trần Khan** | 2510102 | `khan.tran1507@hcmut.edu.vn` | **A6:** `feat/dma-coproc`<br>(DMA Verilator RTL & Bus) | Nguyễn Khắc Triệu<br>(A1) | **22/11/2026** | **B6:** Giải thích cơ chế bất đồng bộ DMA, định địa chỉ Bus; **Đóng gói file nộp bài**. |
 
 ---
 
-## 3. Chi Tiết Nhiệm Vụ Từng Feature Branch
+## 2. Chi Tiết Nhiệm Vụ Từng Feature Branch
 
 ### 🌟 Feature 1: `feat/scheduler` — Bộ Lập Lịch Đa Hàng Đợi (MLQ Scheduler) & Queue
 * **Người phụ trách (Owner):** Nguyễn Khắc Triệu · **Buddy:** Trần Khan
@@ -114,9 +98,9 @@ Dự án được thực hiện trong 3 tuần (từ **02/11/2026** đến **22/
      * `init_mm()`: Cấp phát động 5 mảng bảng trang đại diện cho 5 cấp (`pgd`, `p4d`, `pud`, `pmd`, `pt`), mỗi mảng gồm 512 phần tử ($512 \times 8 = 4096\text{ bytes} = 1\text{ trang}$). Khởi tạo VMA0 (`vm_id = 0`).
      * `pte_get_entry()`, `pte_set_entry()`: Đọc và ghi phần tử bảng trang (PTE).
      * `pte_set_fpn()`, `pte_set_swap()`: Thiết lập các cờ bit `Present`, `Swapped`, `FPN`, `SWPTYP`, `SWPOFF` vào PTE theo đúng định dạng 64-bit đề bài quy định.
-     * `alloc_pages_range()`, `vmap_page_range()`: Xin các khung trang từ RAM và ghi liên kết vào bảng trang + danh sách FIFO `fifo_pgn`.
+     * `alloc_pages_range()`, `vmap_page_range()`, `vmap_pgd_memset()`: Xin các khung trang từ RAM và ghi liên kết vào bảng trang + danh sách FIFO `fifo_pgn`.
      * `print_pgtbl()`: In địa chỉ các cấp bảng trang theo đúng định dạng mẫu:  
-       `PDG=... P4D=... PUD=... PMD=... PT=...`.
+       ` PDG=... P4g=... PUD=... PMD=...`.
 * **Các bài test kiểm tra:**
   * `os_0_mlq_paging`, `os_1_singleCPU_mlq_paging`.
 * **Nhiệm vụ trong Báo cáo (Report - B3):**
@@ -126,23 +110,22 @@ Dự án được thực hiện trong 3 tuần (từ **02/11/2026** đến **22/
 
 ---
 
-### 🌟 Feature 4: `feat/libmem` — Thư Viện Quản Lý Bộ Nhớ User/Kernel & Đồng Bộ Hóa
-* **Người phụ trách (Owner):** Đặng Hồng Anh · **Buddy:** Trịnh Thanh Quang
+### 🌟 Feature 4: `feat/libmem` — Thư Viện Quản Lý Bộ Nhớ User-Space & Thay Trang FIFO
+* **Người phụ trách (Owner):** Đặng Hồng Anh · **Buddy:** Nguyễn Hoàng Quốc Mạnh
 * **Các file code cần chỉnh sửa:**
-  * `hk261_ossim_demacOprx/src/libmem.c` (phần user-space và kmem, ngoại trừ hàm `libmem_dma_memcpy`)
+  * `hk261_ossim_demacOprx/src/libmem.c` (phần user-space)
 * **Nhiệm vụ cụ thể cần hiện thực:**
-  1. Quản lý trang ảo & Hoán đổi (Swapping):
+  1. Quản lý vùng nhớ ảo & Data Segment:
+     * `get_free_vmrg_area()`: Tìm kiếm vùng trống trong `vm_freerg_list` vừa vặn với kích thước yêu cầu.
+     * `__alloc()` / `liballoc()`: Cấp phát vùng nhớ biến từ `vm_freerg_list` hoặc yêu cầu mở rộng qua SYSCALL 17 (`SYSMEM_INC_OP`). Cập nhật bảng `symrgtbl[rgid]`.
+     * `__free()` / `libfree()`: Thu hồi vùng nhớ biến và đưa vào `vm_freerg_list`.
+  2. Quản lý trang ảo & Hoán đổi (Swapping):
      * `find_victim_page()`: Hoàn thiện thuật toán thay trang FIFO dựa trên danh sách `caller->mm->fifo_pgn` (sửa lỗi kiểm tra `prev == NULL` khi chỉ có 1 node).
      * `pg_getpage()`: Kiểm tra bit `PAGING_PAGE_PRESENT`. Nếu trang không online, kích hoạt quy trình swap: tìm trang nạn nhân, gọi `SYSCALL 17 (SYSMEM_SWP_OP)` để chuyển trang ra SWAP, nạp trang cần dùng vào RAM và cập nhật lại PTE.
      * `pg_getval()` / `pg_setval()`: Tính địa chỉ vật lý `phyaddr = fpn * PAGESZ + offset` và gọi `SYSCALL 17` (`SYSMEM_IO_READ` / `SYSMEM_IO_WRITE`) để đọc/ghi 1 byte.
-     * `__read()` / `__write()`: Xác thực vùng nhớ dựa trên `symrgtbl[rgid]` và gọi đọc/ghi.
-  2. Phân tách không gian nhớ User và Kernel:
-     * `libkmem_malloc()` & `__kmalloc()`: Cấp phát vùng nhớ trong không gian Kernel liên tục.
-     * `libkmem_copy_from_user()`: Đọc từ User space và ghi sang Kernel space.
-     * `libkmem_copy_to_user()`: Đọc từ Kernel space và ghi sang User space.
-     * `__read_kernel_mem()`, `__write_kernel_mem()`, `__read_user_mem()`, `__write_user_mem()`.
+     * `__read()` / `__write()` / `libread()` / `libwrite()`: Xác thực vùng nhớ dựa trên `symrgtbl[rgid]` và gọi đọc/ghi (sử dụng đúng `caller->mm`).
   3. Đồng bộ hóa:
-     * Đảm bảo mọi thao tác trên cấu trúc nhớ ảo và bộ nhớ nhân đều được bảo vệ bằng `mmvm_lock` và `kmm_lock`.
+     * Đảm bảo mọi thao tác trên cấu trúc nhớ ảo người dùng đều được bảo vệ bằng `mmvm_lock`.
 * **Các bài test kiểm tra:**
   * `os_1_mlq_paging`, `os_1_mlq_paging_small_1K`, `os_1_mlq_paging_small_4K`.
 * **Nhiệm vụ trong Báo cáo (Report - B4):**
@@ -151,10 +134,34 @@ Dự án được thực hiện trong 3 tuần (từ **02/11/2026** đến **22/
 
 ---
 
-### 🌟 Feature 5: `feat/dma-coproc` — Bộ Đồng Xử Lý DMA (Verilator RTL) & Bus
+### 🌟 Feature 5: `feat/kmem` — Phân Tách Không Gian Nhớ User/Kernel & Quản Lý Bộ Nhớ Nhân
+* **Người phụ trách (Owner):** Nguyễn Hoàng Quốc Mạnh · **Buddy:** Đặng Hồng Anh
+* **Các file code cần chỉnh sửa:**
+  * `hk261_ossim_demacOprx/src/libmem.c` (phần kernel memory)
+  * `hk261_ossim_demacOprx/src/os.c` (hàm `ld_routine`)
+* **Nhiệm vụ cụ thể cần hiện thực:**
+  1. Cấp phát bộ nhớ nhân liên tục:
+     * `ld_routine()` trong `os.c`: Cấp phát bảng trang kernel `krnl_pgd` (và khởi tạo `os.mm`).
+     * `libkmem_malloc()` & `__kmalloc()`: Cấp phát vùng nhớ trong không gian Kernel liên tục về mặt vật lý từ `krnl->mram` và cập nhật ánh xạ vào `krnl->krnl_pgd`.
+  2. Phân tách và truyền dữ liệu an toàn giữa User và Kernel:
+     * `libkmem_copy_from_user()`: Đọc an toàn từ User space và ghi sang Kernel space.
+     * `libkmem_copy_to_user()`: Đọc từ Kernel space và ghi sang User space.
+     * `__read_kernel_mem()`, `__write_kernel_mem()`, `__read_user_mem()`, `__write_user_mem()`.
+  3. Đồng bộ hóa & Bảo vệ bộ nhớ:
+     * Dùng khóa `kmm_lock` bao bọc mọi thao tác trên không gian nhớ nhân.
+     * Kiểm tra ngăn chặn chương trình người dùng truy cập trực tiếp địa chỉ kernel space trái phép.
+* **Các bài test kiểm tra:**
+  * `os_2_singleCPU_mlq_paging`, `os_2_mlq_paging` (phần `kmalloc`, `copy_from_user`, `copy_to_user`).
+* **Nhiệm vụ trong Báo cáo (Report - B5):**
+  * Trình bày cơ chế phân tách địa chỉ chuẩn tắc (Canonical address) giữa User space và Kernel space.
+  * Giải thích cơ chế cấp phát bộ nhớ liên tục trong nhân và cách sao chép an toàn qua `copy_from_user` / `copy_to_user`.
+
+---
+
+### 🌟 Feature 6: `feat/dma-coproc` — Bộ Đồng Xử Lý DMA (Verilator RTL) & Bus Hệ Thống
 * **Người phụ trách (Owner):** Trần Khan · **Buddy:** Nguyễn Khắc Triệu
 * **Các file code cần chỉnh sửa:**
-  * `hk261_ossim_demacOprx/src/os.c` (hàm `co_processor`, `ld_routine`)
+  * `hk261_ossim_demacOprx/src/os.c` (hàm `co_processor`)
   * `hk261_ossim_demacOprx/src/dma_c_testbench.cpp`
   * `hk261_ossim_demacOprx/src/sysbus.c`
   * `hk261_ossim_demacOprx/src/libmem.c` (riêng hàm `libmem_dma_memcpy`)
@@ -166,55 +173,13 @@ Dự án được thực hiện trong 3 tuần (từ **02/11/2026** đến **22/
      * Chạy `make dma` và kiểm tra `./dma_testbench` trên máy ảo Ubuntu để làm quen với luồng hoạt động của DMA.
   2. Khởi tạo luồng Co-processor:
      * `os.c`: Khởi tạo mô phỏng RTL bằng cách gọi `rtl_dma_init_simulation()` trong hàm luồng `co_processor()`.
-     * Khởi tạo mảng `krnl_pgd` trong `ld_routine()`.
   3. Giao tiếp Bus & Sao chép dữ liệu DMA:
      * `dma_c_testbench.cpp`: Trong `dpi_dma_copy()`, gán địa chỉ nguồn/đích trỏ về vùng nhớ `mram->storage` của OS khi hệ thống chạy thực tế.
      * `sysbus.c`: Đảm bảo hàm callback `dma_done_callback()` in ra thông báo hoàn tất truyền dữ liệu.
-     * `libmem.c` (`libmem_dma_memcpy`): Gọi `do_dma()` thực hiện truyền dữ liệu DMA.
+     * `libmem.c` (`libmem_dma_memcpy`): Gọi `do_dma()` thực hiện truyền dữ liệu DMA (tính toán địa chỉ vật lý từ vùng nhớ nguồn và đích).
 * **Các bài test kiểm tra:**
   * Chạy độc lập: `./dma_testbench`
-  * Chạy tích hợp toàn hệ thống: `os_2_singleCPU_mlq_paging`, `os_2_mlq_paging` (các test có lệnh `kmalloc`, `dma_memcpy`, `copy_from_user`).
-* **Nhiệm vụ trong Báo cáo (Report - B5):**
+  * Chạy tích hợp toàn hệ thống: `os_2_singleCPU_mlq_paging`, `os_2_mlq_paging` (phần `dma_memcpy`).
+* **Nhiệm vụ trong Báo cáo (Report - B6):**
   * Trình bày cơ chế hoạt động bất đồng bộ của DMA và cách định địa chỉ Bus (CPU truy cập qua MMU vs. DMA truy cập trực tiếp bộ nhớ).
   * Rà soát kiểm tra lần cuối toàn bộ mã nguồn theo chuẩn GNU C và nén file zip nộp bài `assignment_STUDENTID.zip`.
-
----
-
-## 4. Quy Trình Phối Hợp Làm Việc Trên Git (Git Collaboration Rules)
-
-1. **Tuyệt đối không push code trực tiếp lên nhánh `main`.** Nhánh `main` chỉ chứa code đã chạy ổn định và được nhóm kiểm duyệt.
-2. **Quy trình làm việc cá nhân:**
-   * Trước khi làm việc: Kéo code mới nhất từ `main`:
-     ```bash
-     git checkout main
-     git pull origin main
-     ```
-   * Tạo nhánh tính năng cá nhân (nếu chưa tạo):
-     ```bash
-     git checkout -b feat/<ten-tinh-nang>
-     ```
-   * Code và biên dịch thử nghiệm trên máy ảo Ubuntu (`make all`).
-   * Commit rõ ràng theo chuẩn Conventional Commits:
-     ```bash
-     git add .
-     git commit -m "feat(module): Mo ta cong viec da hoan thanh"
-     git push -u origin feat/<ten-tinh-nang>
-     ```
-3. **Thứ tự ghép code (Merge Order) vào `main`:**
-   1. `feat/scheduler` (Hạn: 08/11/2026 - Kiểm thử độc lập CPU & MLQ Scheduler).
-   2. `feat/mm64-memphy` (Hạn: 10/11/2026 - Bộ nhớ RAM & Phân trang 5 cấp).
-   3. `feat/syscall-mmvm` (Hạn: 11/11/2026 - Giao diện Syscall an toàn).
-   4. `feat/libmem` (Hạn: 13/11/2026 - Bộ nhớ User/Kernel & Hoán đổi trang).
-   5. `feat/dma-coproc` (Hạn: 15/11/2026 - Bộ đồng xử lý DMA toàn diện).
-
----
-
-## 5. Cơ Cấu Điểm Đánh Giá Môn Học (Theo mục 3.4 của Đề bài)
-
-* **Vấn đáp / Thực hành Demo (7.0 điểm):**
-  * **Lập lịch (Scheduling):** 2.0 điểm
-  * **MMU và không gian User/Kernel:** 2.0 điểm
-  * **Bộ đồng xử lý (Co-processor / DMA):** 3.0 điểm
-    * *1.0 điểm:* Cơ chế hoạt động bất đồng bộ (Asynchronous operation).
-    * *2.0 điểm:* Định địa chỉ Bus (1.0 điểm CPU truy cập qua MMU, 1.0 điểm Co-processor truy cập bộ nhớ).
-* **Báo cáo (Report - 3.0 điểm):** Đánh giá chung toàn bộ biểu đồ Gantt, sơ đồ dịch địa chỉ, bảng phân bổ bộ nhớ và câu trả lời cho 7 câu hỏi lý thuyết.
