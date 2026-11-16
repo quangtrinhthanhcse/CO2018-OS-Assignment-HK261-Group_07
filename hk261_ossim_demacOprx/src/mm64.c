@@ -603,18 +603,28 @@ int print_list_pgn(struct pgn_t *ip)
 
 int print_pgtbl(struct pcb_t *caller, addr_t start, addr_t end)
 {
-//addr_t pgn = ...
-//addr_t pgit = ...
-//struct mm_struct *mm = ...
-  addr_t pgd=0;
-  addr_t p4d=0;
-  addr_t pud=0;
-  addr_t pmd=0;
-  addr_t pt=0;
+  struct mm_struct *mm;
+  addr_t pgd = 0;
+  addr_t p4d = 0;
+  addr_t pud = 0;
+  addr_t pmd = 0;
+  addr_t pt = 0;
+
+  if (caller == NULL || caller->mm == NULL)
+    return -1;
+
+  mm = caller->mm;
+  if (mm->pgd == NULL || mm->p4d == NULL || mm->pud == NULL || mm->pmd == NULL)
+    return -1;
 
   get_pd_from_address(start, &pgd, &p4d, &pud, &pmd, &pt);
 
-  /* TODO traverse the page map and dump the page directory entries */
+  /* Dump the directory addresses matching reference output format */
+  printf(" PDG=%llx P4g=%llx PUD=%llx PMD=%llx\n",
+         (unsigned long long)(uintptr_t)(mm->pgd + pgd),
+         (unsigned long long)(uintptr_t)(mm->p4d + p4d),
+         (unsigned long long)(uintptr_t)(mm->pud + pud),
+         (unsigned long long)(uintptr_t)(mm->pmd + pmd));
 
   return 0;
 }
