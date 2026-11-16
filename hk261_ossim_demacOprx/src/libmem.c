@@ -470,8 +470,9 @@ addr_t __kmalloc(struct pcb_t *caller, int vmaid, int rgid, addr_t size, addr_t 
 
   addr_t start = kmem_top;
   addr_t end = start + size;
+  addr_t aligned_end = KMEM_ALIGN_UP(end);
 
-  if (end < start || KMEM_ALIGN_UP(end) > KMEM_LIMIT)
+  if (end < start || aligned_end < end || aligned_end > KMEM_LIMIT)
   {
     pthread_mutex_unlock(&kmm_lock);
     return (addr_t)-1;
@@ -494,8 +495,7 @@ addr_t __kmalloc(struct pcb_t *caller, int vmaid, int rgid, addr_t size, addr_t 
     SETVAL(*pte, fpn, PAGING_PTE_FPN_MASK, PAGING_PTE_FPN_LOBIT);
   }
 
-  kmem_nr_pages += (unsigned long)((KMEM_ALIGN_UP(end) - start) / KMEM_PAGESZ);
-  kmem_top = KMEM_ALIGN_UP(end);
+  kmem_top = aligned_end;
   ksymrgtbl[rgid].vmaid = vmaid;
   ksymrgtbl[rgid].rg_start = start;
   ksymrgtbl[rgid].rg_end = end;
