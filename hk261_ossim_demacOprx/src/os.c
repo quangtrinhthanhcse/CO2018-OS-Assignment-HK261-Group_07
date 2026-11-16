@@ -118,22 +118,18 @@ static void * cpu_routine(void * args) {
 }
 
 
+/*
+ * co_processor - bring up the DMA co-processor (Verilator RTL model).
+ * main() joins this thread before starting any CPU, so the chip exists
+ * before a process can issue dma_memcpy.
+ */
 static void * co_processor(void *arg) {
-    (void)arg;
-    /* TODO: Initialize the internal Verilator RTL simulation.
-	 *       This is necessary to ensure that the RTL simulation is ready for DPI calls.
-      */
-    if (rtl_dma_init_simulation() != 0) {
-        printf("Cannot initialize RTL simulation\n");
-        return (void*)1;
-    }
-	
-	/* TODO: This asynchronous implementation of DMA
-     *        DMA completion callback is not yet implemented in this testbench
-     */
-    // Install callback handler
-    //dma_done_callback();  // Call the callback to signal DMA completion
-    return NULL;
+	(void)arg;
+	if (rtl_dma_init_simulation() != 0) {
+		printf("Cannot initialize RTL simulation\n");
+		return (void*)1;
+	}
+	return NULL;
 }
 
 static void * ld_routine(void * args) {
@@ -302,6 +298,13 @@ int main(int argc, char * argv[]) {
 	/* Init scheduler */
 	init_scheduler();
 
+	/* Start the co-processor first: CPUs must not run before the DMA chip exists */
+	void *dma_ret = NULL;
+	pthread_create(dma, NULL, co_processor, NULL);
+	pthread_join(*dma, &dma_ret);
+	if (dma_ret != NULL)
+		printf("DMA unavailable, dma_memcpy will fail\n");
+
 	/* Run CPU and loader */
 #ifdef MM_PAGING
 	pthread_create(&ld, NULL, ld_routine, (void*)mm_ld_args);
@@ -312,9 +315,6 @@ int main(int argc, char * argv[]) {
 		pthread_create(&cpu[i], NULL,
 			cpu_routine, (void*)&args[i]);
 	}
-
-	/* Run co-processor */
-	pthread_create(dma, NULL, co_processor, NULL);
 
 	/* Wait for CPU and loader finishing */
 	for (i = 0; i < num_cpus; i++) {
