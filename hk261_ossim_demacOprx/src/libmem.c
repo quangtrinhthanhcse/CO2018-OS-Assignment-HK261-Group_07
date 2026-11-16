@@ -475,11 +475,8 @@ addr_t __kmalloc(struct pcb_t *caller, int vmaid, int rgid, addr_t size, addr_t 
   //struct krnl_t *krnl = caller->krnl;
   //krnl->symrgtbl...
   //krnl->krnl_pgd ...
-<<<<<<< Updated upstream
-=======
 
   return 0;
->>>>>>> Stashed changes
  
 }
 
