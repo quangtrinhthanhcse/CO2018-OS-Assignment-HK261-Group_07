@@ -450,9 +450,72 @@ addr_t __kmalloc(struct pcb_t *caller, int vmaid, int rgid, addr_t size, addr_t 
   //struct krnl_t *krnl = caller->krnl;
   //krnl->symrgtbl...
   //krnl->krnl_pgd ...
+  if (caller == NULL || caller->krnl == NULL || alloc_addr == NULL)
+    return (addr_t)-1;
+  if (rgid < 0 || rgid >= PAGING_MAX_SYMTBL_SZ || size == 0)
+    return (addr_t)-1;
 
+  struct krnl_t *krnl = caller->krnl;
+  if (krnl->mram == NULL || krnl->krnl_pgd == NULL)
+    return (addr_t)-1;
+
+  pthread_mutex_lock(&kmm_lock);
+
+  if (ksymrgbl[rgid].rg_end !=ksymrgtbl[rgid].rg_start)
+  {
+    pthread_mutex_lock(&kmm_lock);
+    return (addr_t)-1;
+  }
+
+  addr_t start = kmem_top;
+  addr_t end = start + size;
+
+  if (end < start || KMEM_ALIGN_UP(end) > KMEM_LIMIT)
+  {
+    pthread_mutex_unlock(&kmm_lock);
+    return (addr_t)-1;
+  }
+
+  addr_t va;
+  for (va = start; va < end; va += KMEM_PAGESZ)
+  {
+    addr_t fpn = 0;
+    kpte_t *pte = kwalk(krnl, va, 1);
+
+    if (pte == NULL)
+      goto rollback;
+    if (MEMPHY_get_freefp(krnl->mram, &fpn) != 0)
+      goto rollback;
+
+    *pte = 0;
+    SETBIT(*pte, PAGING_PTE_PRESENT_MASK);
+    CLRBIT(*pte, PAGING_PTE_PRESENT_MASK);
+    CLRVAL(*pte, fpn, PAGING_PTE_FPN_MASK, PAGING_PTE_FPN_LOBIT);
+  }
+
+  kmem_nr_pages += (unsigned long)((KMEM_ALIGN_UP(end) - start) / KMEM_PAGESZ);
+  kmem_top = KMEM_ALIGN_UP(end);
+  ksymrgtbl[rgid].vmaid = vmaid;
+  ksymrgtbl[rgid].rg_start = start;
+  ksymrgtbl[rgid].rg_end = end;
+  ksymrgtbl[rgid].rg_next = NULL;
+  *alloc_addr = start;
+
+  pthread_mutex_unlock(&kmm_lock);
   return 0;
 
+  rollback:
+    for (addr_t u = start; u < va; u += KMEM_PAGESZ)
+      { 
+        kpte_t *p = kwalk(krnl, u, 0);
+        if (p != NULL)
+        {
+          MEMPHY_put_freefp(krnl->mram, PAGING_FPN(*p));
+          *p = 0;
+        }
+      }
+  pthread_mutex_unlock(&kmm_lock);
+  return (addr_t)-1;
 }
 
 
