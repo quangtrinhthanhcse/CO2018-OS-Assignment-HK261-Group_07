@@ -146,7 +146,7 @@ int pte_set_swap(struct pcb_t *caller, addr_t pgn, int swptyp, addr_t swpoff)
  */
 int pte_set_fpn(struct mm_struct *mm, addr_t pgn, addr_t fpn, struct pcb_t *caller)
 {
-  struct krnl_t *krnl = caller->krnl;
+  // struct krnl_t *krnl = caller->krnl;
 
   addr_t *pte = NULL;
   addr_t pgd=0;
@@ -156,16 +156,24 @@ int pte_set_fpn(struct mm_struct *mm, addr_t pgn, addr_t fpn, struct pcb_t *call
   addr_t pt=0;
 	
   // dummy pte alloc to avoid runtime error
-  pte = malloc(sizeof(addr_t));
+  // pte = malloc(sizeof(addr_t));
+  if (caller != NULL && caller->mm != NULL)
+    mm = caller->mm;
+
 #ifdef MM64	
   /* Get value from the system */
   /* TODO Perform multi-level page mapping */
   get_pd_from_pagenum(pgn, &pgd, &p4d, &pud, &pmd, &pt);
-  //... krnl->mm->pgd
+  SETBIT(mm->pgd[pgd], PAGING_PTE_PRESENT_MASK);
+  SETBIT(mm->p4d[p4d], PAGING_PTE_PRESENT_MASK);
+  SETBIT(mm->pud[pud], PAGING_PTE_PRESENT_MASK);
+  SETBIT(mm->pmd[pmd], PAGING_PTE_PRESENT_MASK);
+  pte = &mm->pt[pt];
   //... krnl->mm->pt
   //pte = &krnl->mm->pt;
 #else
-  pte = &krnl->mm->pgd[pgn];
+  // pte = &krnl->mm->pgd[pgn];
+  pte = &mm->pgd[pgn];
 #endif
 
   SETBIT(*pte, PAGING_PTE_PRESENT_MASK);
@@ -185,7 +193,7 @@ int pte_set_fpn(struct mm_struct *mm, addr_t pgn, addr_t fpn, struct pcb_t *call
  **/
 addr_t pte_get_entry(struct mm_struct *mm, addr_t pgn, struct pcb_t *caller)
 {
-  struct krnl_t *krnl = caller->krnl;
+  // struct krnl_t *krnl = caller->krnl;
 
   addr_t *pte = NULL;
   addr_t pgd=0;
@@ -194,20 +202,27 @@ addr_t pte_get_entry(struct mm_struct *mm, addr_t pgn, struct pcb_t *caller)
   addr_t pmd=0;
   addr_t pt=0;
 	
+  if (caller != NULL && caller->mm != NULL)
+    mm = caller->mm;
+
   // dummy pte alloc to avoid runtime error
-  pte = malloc(sizeof(addr_t));
+  // pte = malloc(sizeof(addr_t));
+
 #ifdef MM64	
   /* Get value from the system */
   /* TODO Perform multi-level page mapping */
   get_pd_from_pagenum(pgn, &pgd, &p4d, &pud, &pmd, &pt);
+  pte = &mm->pt[pt];
   //... krnl->mm->pgd
   //... krnl->mm->pt
   //pte = &krnl->mm->pt;
 #else	
-  pte = &krnl->mm->pgd[pgn];
+  // pte = &krnl->mm->pgd[pgn];
+  pte = &mm->pgd[pgn];
 #endif
 
-  return (addr_t) &pte;
+  // return (addr_t) &pte;
+  return *pte;
 }
 
 /* Set PTE page table entry
@@ -217,7 +232,7 @@ addr_t pte_get_entry(struct mm_struct *mm, addr_t pgn, struct pcb_t *caller)
  **/
 int pte_set_entry(struct mm_struct *mm, addr_t pgn, uint64_t pte_val, struct pcb_t *caller)
 {
-  struct krnl_t *krnl = caller->krnl;
+  // struct krnl_t *krnl = caller->krnl;
 
   addr_t *pte = NULL;
   addr_t pgd=0;
@@ -226,17 +241,22 @@ int pte_set_entry(struct mm_struct *mm, addr_t pgn, uint64_t pte_val, struct pcb
   addr_t pmd=0;
   addr_t pt=0;
 	
+  if (caller != NULL && caller->mm != NULL)
+    mm = caller->mm;
+
   // dummy pte alloc to avoid runtime error
-  pte = malloc(sizeof(addr_t));
+  // pte = malloc(sizeof(addr_t));
 #ifdef MM64	
   /* Get value from the system */
   /* TODO Perform multi-level page mapping */
   get_pd_from_pagenum(pgn, &pgd, &p4d, &pud, &pmd, &pt);
-  //... krnl->mm->pgd
+  pte = &mm->pt[pt];
+  *pte = pte_val;//... krnl->mm->pgd
   //... krnl->mm->pt
   //pte = &krnl->mm->pt;
 #else	
-  pte = pte_val;
+  // pte = pte_val;
+  mm->pgd[pgn] = pte_val;
 #endif
 
 	return 0;
@@ -411,11 +431,11 @@ int init_mm(struct mm_struct *mm, struct pcb_t *caller)
   struct vm_area_struct *vma0 = malloc(sizeof(struct vm_area_struct));
 
   /* TODO init page table directory */
-   //mm->pgd = ...
-   //mm->p4d = ...
-   //mm->pud = ...
-   //mm->pmd = ...
-   //mm->pt = ...
+  mm->pgd = calloc(PAGING64_MAX_PGN, sizeof(addr_t));
+  mm->p4d = calloc(PAGING64_MAX_PGN, sizeof(addr_t));
+  mm->pud = calloc(PAGING64_MAX_PGN, sizeof(addr_t));
+  mm->pmd = calloc(PAGING64_MAX_PGN, sizeof(addr_t));
+  mm->pt = calloc(PAGING64_MAX_PGN, sizeof(addr_t));
 
 
   /* By default the owner comes with at least one vma */
@@ -424,18 +444,24 @@ int init_mm(struct mm_struct *mm, struct pcb_t *caller)
   vma0->vm_end = vma0->vm_start;
   vma0->sbrk = vma0->vm_start;
   struct vm_rg_struct *first_rg = init_vm_rg(vma0->vm_start, vma0->vm_end);
+  vma0->vm_freerg_list = NULL;
   enlist_vm_rg_node(&vma0->vm_freerg_list, first_rg);
 
   /* TODO update VMA0 next */
-  // vma0->next = ...
+  vma0->vm_next = NULL;
 
   /* Point vma owner backward */
-  //vma0->vm_mm = mm; 
+  vma0->vm_mm = mm; 
 
   /* TODO: update mmap */
-  //mm->mmap = ...
-  //mm->symrgtbl = ...
-  //mm->kcpooltbl
+  mm->mmap = vma0;
+  for (int i= 0; i < PAGING_MAX_SYMTBL_SZ; i++){
+    mm->symrgtbl[i].rg_start = 0;
+    mm->symrgtbl[i].rg_end = 0;
+    mm->symrgtbl[i].rg_next = NULL;
+  }
+  mm->fifo_pgn = NULL;
+  mm->kcpooltbl = NULL;
 
   return 0;
 }
