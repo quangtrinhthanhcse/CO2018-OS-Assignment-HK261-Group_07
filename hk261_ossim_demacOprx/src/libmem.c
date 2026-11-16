@@ -450,9 +450,7 @@ addr_t __kmalloc(struct pcb_t *caller, int vmaid, int rgid, addr_t size, addr_t 
   //struct krnl_t *krnl = caller->krnl;
   //krnl->symrgtbl...
   //krnl->krnl_pgd ...
-
-  addr_t __kmalloc(struct pcb_t *caller, int vmaid, int rgid, addr_t size, addr_t *alloc_addr)
-{
+  
   if (caller == NULL || caller->krnl == NULL || alloc_addr == NULL)
     return (addr_t)-1;
   if (rgid < 0 || rgid >= PAGING_MAX_SYMTBL_SZ || size == 0)
