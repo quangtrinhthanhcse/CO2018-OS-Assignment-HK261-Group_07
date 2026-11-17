@@ -476,7 +476,7 @@ addr_t __kmalloc(struct pcb_t *caller, int vmaid, int rgid, addr_t size, addr_t 
   //krnl->symrgtbl...
   //krnl->krnl_pgd ...
   
-  if (caller == NULL || caller->krnl == NULL || alloc_addr == NULL)
+if (caller == NULL || caller->krnl == NULL || alloc_addr == NULL)
     return (addr_t)-1;
   if (rgid < 0 || rgid >= PAGING_MAX_SYMTBL_SZ || size == 0)
     return (addr_t)-1;
@@ -487,27 +487,27 @@ addr_t __kmalloc(struct pcb_t *caller, int vmaid, int rgid, addr_t size, addr_t 
 
   pthread_mutex_lock(&kmm_lock);
 
-  if (ksymrgtbl[rgid].rg_end != ksymrgtbl[rgid].rg_start)
+  if (krnl->ksymrgtbl[rgid].rg_end != krnl->ksymrgtbl[rgid].rg_start)
   {
     pthread_mutex_unlock(&kmm_lock);
     return (addr_t)-1;
   }
 
-  addr_t start = kmem_top;
+  addr_t start = krnl->kmem_top;
   addr_t end = start + size;
-  addr_t aligned_end = KMEM_ALIGN_UP(end);
+  addr_t aligned_end = PAGING_PAGE_ALGN(end);
 
-  if (end < start || aligned_end < end || aligned_end > KMEM_LIMIT)
+  if (end < start || aligned_end < end || aligned_end > PAGING_KMEM_LIMIT)
   {
     pthread_mutex_unlock(&kmm_lock);
     return (addr_t)-1;
   }
 
   addr_t va;
-  for (va = start; va < end; va += KMEM_PAGESZ)
+  for (va = start; va < end; va += PAGING_PAGESZ)
   {
     addr_t fpn = 0;
-    kpte_t *pte = kwalk(krnl, va, 1);
+    uint32_t *pte = krnl_walk(krnl, va, 1);
 
     if (pte == NULL)
       goto rollback;
@@ -520,20 +520,20 @@ addr_t __kmalloc(struct pcb_t *caller, int vmaid, int rgid, addr_t size, addr_t 
     SETVAL(*pte, fpn, PAGING_PTE_FPN_MASK, PAGING_PTE_FPN_LOBIT);
   }
 
-  kmem_top = aligned_end;
-  ksymrgtbl[rgid].vmaid = vmaid;
-  ksymrgtbl[rgid].rg_start = start;
-  ksymrgtbl[rgid].rg_end = end;
-  ksymrgtbl[rgid].rg_next = NULL;
+  krnl->kmem_top = aligned_end;
+  krnl->ksymrgtbl[rgid].vmaid = vmaid;
+  krnl->ksymrgtbl[rgid].rg_start = start;
+  krnl->ksymrgtbl[rgid].rg_end = end;
+  krnl->ksymrgtbl[rgid].rg_next = NULL;
   *alloc_addr = start;
 
   pthread_mutex_unlock(&kmm_lock);
   return 0;
 
 rollback:
-  for (addr_t u = start; u < va; u += KMEM_PAGESZ)
+  for (addr_t u = start; u < va; u += PAGING_PAGESZ)
   {
-    kpte_t *p = kwalk(krnl, u, 0);
+    uint32_t *p = krnl_walk(krnl, u, 0);
     if (p != NULL)
     {
       MEMPHY_put_freefp(krnl->mram, PAGING_FPN(*p));
@@ -542,7 +542,6 @@ rollback:
   }
   pthread_mutex_unlock(&kmm_lock);
   return (addr_t)-1;
- 
 }
 
 
