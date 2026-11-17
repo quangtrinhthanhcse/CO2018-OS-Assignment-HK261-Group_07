@@ -36,9 +36,9 @@ int queue_empty(void) {
 
 void init_scheduler(void) {
 #ifdef MLQ_SCHED
-    int i ;
+	int i;
 
-	for (i = 0; i < MAX_PRIO; i ++) {
+	for (i = 0; i < MAX_PRIO; i++) {
 		mlq_ready_queue[i].size = 0;
 		slot[i] = MAX_PRIO - i; 
 	}
@@ -58,18 +58,49 @@ void init_scheduler(void) {
  */
 struct pcb_t * get_mlq_proc(void) {
 	struct pcb_t * proc = NULL;
+	int i;
+	int has_proc = 0;
 
 	pthread_mutex_lock(&queue_lock);
 	/*TODO: get a process from PRIORITY [ready_queue].
 	 *      It worth to protect by a mechanism.
 	 * */
+	for (i = 0; i < MAX_PRIO; i++) {
+		if (!empty(&mlq_ready_queue[i])) {
+			has_proc = 1;
+			if (slot[i] > 0) {
+				proc = dequeue(&mlq_ready_queue[i]);
+				slot[i]--;
+				break;
+			}
+		}
+	}
 
-	if (proc != NULL)
+	if (proc == NULL && has_proc == 1) {
+		for (i = 0; i < MAX_PRIO; i++) {
+			slot[i] = MAX_PRIO - i;
+		}
+		for (i = 0; i < MAX_PRIO; i++) {
+			if (!empty(&mlq_ready_queue[i]) && slot[i] > 0) {
+				proc = dequeue(&mlq_ready_queue[i]);
+				slot[i]--;
+				break;
+			}
+		}
+	}
+
+	if (proc != NULL) {
 		enqueue(&running_list, proc);
+	}
+	pthread_mutex_unlock(&queue_lock);
+
 	return proc;	
 }
 
 void put_mlq_proc(struct pcb_t * proc) {
+	if (proc == NULL) {
+		return;
+	}
 	proc->krnl->ready_queue = &ready_queue;
 	proc->krnl->mlq_ready_queue = mlq_ready_queue;
 	proc->krnl->running_list = &running_list;
@@ -80,11 +111,15 @@ void put_mlq_proc(struct pcb_t * proc) {
 	 */
 
 	pthread_mutex_lock(&queue_lock);
+	purgequeue(&running_list, proc);
 	enqueue(&mlq_ready_queue[proc->prio], proc);
 	pthread_mutex_unlock(&queue_lock);
 }
 
 void add_mlq_proc(struct pcb_t * proc) {
+	if (proc == NULL) {
+		return;
+	}
 	proc->krnl->ready_queue = &ready_queue;
 	proc->krnl->mlq_ready_queue = mlq_ready_queue;
 	proc->krnl->running_list = &running_list;
@@ -119,13 +154,23 @@ struct pcb_t * get_proc(void) {
 	 *       It worth to protect by a mechanism.
 	 * 
 	 */
-
+	if (!empty(&ready_queue)) {
+		proc = dequeue(&ready_queue);
+	} else if (!empty(&run_queue)) {
+		proc = dequeue(&run_queue);
+	}
+	if (proc != NULL) {
+		enqueue(&running_list, proc);
+	}
 	pthread_mutex_unlock(&queue_lock);
 
 	return proc;
 }
 
 void put_proc(struct pcb_t * proc) {
+	if (proc == NULL) {
+		return;
+	}
 	proc->krnl->ready_queue = &ready_queue;
 	proc->krnl->running_list = &running_list;
 
@@ -135,11 +180,15 @@ void put_proc(struct pcb_t * proc) {
 	 */
 
 	pthread_mutex_lock(&queue_lock);
+	purgequeue(&running_list, proc);
 	enqueue(&run_queue, proc);
 	pthread_mutex_unlock(&queue_lock);
 }
 
 void add_proc(struct pcb_t * proc) {
+	if (proc == NULL) {
+		return;
+	}
 	proc->krnl->ready_queue = &ready_queue;
 	proc->krnl->running_list = &running_list;
 
@@ -153,5 +202,3 @@ void add_proc(struct pcb_t * proc) {
 	pthread_mutex_unlock(&queue_lock);	
 }
 #endif
-
-
