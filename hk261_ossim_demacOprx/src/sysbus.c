@@ -6,7 +6,7 @@
  * personal permission to use and modify the Licensed Source Code
  * for the sole purpose of studying while attending the course CO2018.
  *
- * system bus - Only for dma_testbech simulation access
+ * system bus - DMA chip access to memory (testbench bank or OS RAM)
  */
 
 #include <stdio.h>
@@ -29,6 +29,12 @@ typedef struct {
 // Array of memory banks
 static memory_bank_t_struct g_banks[MAX_MEMORY_BANKS] = {0};
 static int g_bank_count = 0;
+
+// Memory the DMA chip addresses, set by sysbus_map() before each transfer
+static uint8_t* g_bus_mem = NULL;
+static uint64_t g_bus_size = 0;
+static uint64_t g_bus_wr_start = 0;
+static uint64_t g_bus_wr_end = 0;
 
 // Initialize a memory bank with given size in bytes
 memory_bank_t memory_bank_init(size_t size_bytes) {
@@ -107,6 +113,13 @@ size_t memory_bank_get_size() {
     return g_banks[0].size;
 }
 
+void sysbus_map(void *mem, uint64_t size, uint64_t dst, uint64_t len) {
+    g_bus_mem = (uint8_t*)mem;
+    g_bus_size = size;
+    g_bus_wr_start = dst;
+    g_bus_wr_end = dst + len;
+}
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -116,29 +129,28 @@ extern "C" {
  * DPI Callback: Called from RTL when DMA read access
  */
 int dpi_bank_read32_legacy(long long offset) {
-    uint8_t data[4] = {0};
+    uint32_t value = 0;
 
-    void* src = memory_bank_get_ptr((size_t)offset);
-
-    //printf("MEM READ RESULT: Address=%p, DPI return=%x, Readback=%x, Match=%d\n",
-    //        (void*)((size_t)offset), *(unsigned int*)data, *(unsigned int*)data, 1);
-    //fflush(stdout);
-    
-    memcpy(&data, src, 4);
-
-    return  *((uint32_t*)data);
+    // Byte by byte (spec 2.3.2): same byte order on any host, bytes past the memory end read as 0
+    for (int i = 0; i < 4; i++) {
+        uint64_t addr = (uint64_t)offset + i;
+        if (g_bus_mem && addr < g_bus_size)
+            value |= (uint32_t)g_bus_mem[addr] << (8 * i);
+    }
+    return (int)value;
 }
 
 /**
  * DPI Callback: Called from RTL when DMA write access
  */
 int dpi_bank_write32_legacy(long long offset, int value) {
-    void* dst = memory_bank_get_ptr((size_t)offset);
-    //printf("MEM WRITE RESULT: Address=%p, Write data=%x, Write rc=0, Readback=%x, Match=1\n",
-    //        (void*)((size_t)offset), *(unsigned int*)&value, *(unsigned int*)&value);
-    memcpy(dst,  &value, 4);
-    //fflush(stdout);
-       
+    // The last word of a transfer may stick out of the destination: drop those bytes
+    for (int i = 0; i < 4; i++) {
+        uint64_t addr = (uint64_t)offset + i;
+        if (g_bus_mem && addr < g_bus_size &&
+            addr >= g_bus_wr_start && addr < g_bus_wr_end)
+            g_bus_mem[addr] = (uint8_t)((uint32_t)value >> (8 * i));
+    }
     return 0;
 }
 

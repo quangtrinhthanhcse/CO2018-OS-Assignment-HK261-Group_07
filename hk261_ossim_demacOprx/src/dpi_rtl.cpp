@@ -17,11 +17,34 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <atomic>
+
+// ./os links a global write() (cpu.c) that captures the ::write of Verilator's VCD file: use stdio
+class VcdStdioFile : public VerilatedVcdFile {
+    FILE* m_fp = nullptr;
+public:
+    bool open(const std::string& name) override {
+        m_fp = fopen(name.c_str(), "w");
+        return m_fp != nullptr;
+    }
+    void close() override {
+        if (m_fp) fclose(m_fp);
+        m_fp = nullptr;
+    }
+    // shortcut: a failed trace write (disk full) loses that chunk of the trace; reporting it hangs in Verilator 5.032's fatal path
+    ssize_t write(const char* bufp, ssize_t len) override {
+        fwrite(bufp, 1, (size_t)len, m_fp);
+        return len;
+    }
+};
 
 // DMA RTL simulation structures
 static Vdma_top* top = nullptr;
 static VerilatedContext* context = nullptr;
 static VerilatedVcdC* tracer = nullptr;
+static VcdStdioFile vcd_file;
+// Set last by rtl_dma_init_simulation: a CPU may issue DMA while co_processor is still creating the chip
+static std::atomic<bool> chip_ready{false};
 
 static bool is_tracing = false;
 static uint64_t sim_time = 0;
@@ -38,7 +61,7 @@ extern "C" int rtl_dma_init_simulation(void) {
     context->commandArgs(0, args);
     top = new Vdma_top(context, "dma_top");
     
-    tracer = new VerilatedVcdC;
+    tracer = new VerilatedVcdC(&vcd_file);
     context->traceEverOn(true);
     top->trace(tracer, 99);
     tracer->open("rtl_trace.vcd");
@@ -46,6 +69,7 @@ extern "C" int rtl_dma_init_simulation(void) {
     sim_time = 0;
     
     printf("Initialized dma_rtl simulation\n");
+    chip_ready = true;
     return 0;
 }
 
@@ -53,6 +77,7 @@ extern "C" int rtl_dma_init_simulation(void) {
  * rtl_dma_cleanup_simulation - Cleanup the RTL simulation for DMA
  */
 extern "C" void rtl_dma_cleanup_simulation(void) {
+    chip_ready = false;
     if (tracer) {
         tracer->close();
         delete tracer;
@@ -78,7 +103,7 @@ extern "C" void rtl_dma_cleanup_simulation(void) {
  * length: number of bytes to copy
  */
 extern "C" int dpi_rtl_dma_copy(uint64_t source, uint64_t destination, uint64_t length) {
-    if (!top) {
+    if (!chip_ready) {
         printf("Cannot perform DMA copy: RTL simulation not initialized\n");
         return -1;
     }
@@ -112,8 +137,8 @@ extern "C" int dpi_rtl_dma_copy(uint64_t source, uint64_t destination, uint64_t 
     top->ch_pause = 0;
     
     // Run simulation
-    int cycle = 0;
-    int max_cycles = 100000;
+    uint64_t cycle = 0;
+    uint64_t max_cycles = 100000 + 8 * length;  // a 32-bit word takes 16 half-cycles: 8 per byte is 2x margin
     
     while (cycle < max_cycles && !top->ch_done) {
         top->clk ^= 1;
@@ -153,7 +178,7 @@ extern "C" int dpi_rtl_dma_copy(uint64_t source, uint64_t destination, uint64_t 
  * dpi_rtl_dma_is_available - Check if RTL DMA is available
  */
 extern "C" int dpi_rtl_dma_is_available(void) {
-    return top != nullptr;
+    return chip_ready;
 }
 
 

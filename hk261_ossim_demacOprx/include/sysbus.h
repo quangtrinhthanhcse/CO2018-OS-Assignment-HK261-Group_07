@@ -43,6 +43,10 @@ size_t memory_bank_get_size(void);
 // Check if memory bank is initialized
 int memory_bank_is_available(void);
 
+// Map memory (testbench bank or OS RAM) at bus address 0 for one transfer;
+// the 32-bit bus has no byte enables, so writes outside [dst, dst + len) are dropped
+void sysbus_map(void *mem, uint64_t size, uint64_t dst, uint64_t len);
+
 // DPI Callback: Called from RTL when DMA read access
 int dpi_bank_read32_legacy(long long offset);
 

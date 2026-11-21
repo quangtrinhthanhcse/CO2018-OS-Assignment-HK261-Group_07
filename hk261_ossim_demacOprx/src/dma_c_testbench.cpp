@@ -28,6 +28,7 @@
 #include <cstdbool>
 #include <thread>
 #include <atomic>
+#include <mutex>
 
 // Generated DPI functions from RTL
 #include <verilated.h>
@@ -35,16 +36,24 @@
 #include "Vdma_top.h"
 #include "Vdma_top__Dpi.h"  
 
-#if DMA_MAIN == 1
 extern "C" {
 #include "common.h"
 #include "os-mm.h"
 }
-#endif
 
 // RTL Direct Test - Drive Verilator RTL directly
 extern "C" int dpi_rtl_dma_copy(uint64_t src_offset, uint64_t dst_offset, uint64_t length);
 extern "C" int dpi_rtl_dma_is_available(void);
+
+/*
+ * dump8 - print 8 bytes at a bank offset like the original trace, 0x00 past the bank end
+ */
+static void dump8(const char *name, uint64_t offset) {
+    for (int i = 0; i < 8; i++) {
+        uint8_t *p = (uint8_t*)memory_bank_get_ptr(offset + i);
+        printf(i % 2 ? ", %s[%d] = 0x%02x\n" : "  %s[%d] = 0x%02x", name, i, p ? *p : 0);
+    }
+}
 
 /*
  * dpi_dma_copy - perform DMA copy via DPI
@@ -53,29 +62,58 @@ extern "C" int dpi_rtl_dma_is_available(void);
  * length: number of bytes to copy
  */
 int dpi_dma_copy(struct pcb_t *caller, uint64_t src_offset, uint64_t dst_offset, uint64_t length) {
-    void *src = NULL;
-    void *dst = NULL;
-    //struct krnl_t *krnl = caller->krnl;
+    static std::mutex dma_lock;     // one chip and one bus for all CPUs: bind, run and callback together
+    std::lock_guard<std::mutex> guard(dma_lock);
+    int testbench = memory_bank_is_available();
+    uint8_t *mem = NULL;            // memory at bus address 0
+    uint64_t size = 0;
 
-    if (memory_bank_is_available()) {
-        printf("dma_testbench modeo with dpi_dma_copy from memory bank\n");
-        src = memory_bank_get_ptr(src_offset);
-        dst = memory_bank_get_ptr(dst_offset);
-    } else {
-        /*
-         * TODO: map system OS memory address
-         */
-        //printf("dma_testbench modeo with OS memory address\n");
-        //src =  krnl->...
-        //dst =  krnl->...
+    if (!dpi_rtl_dma_is_available()) {
+        printf("Cannot perform DMA copy: RTL simulation not initialized\n");
+        return -1;
     }
+
+    if (testbench) {
+        printf("dma_testbench modeo with dpi_dma_copy from memory bank\n");
+        mem = (uint8_t*)memory_bank_get_ptr(0);
+        size = memory_bank_get_size();
+    } else {
+        /* OS mode: bus addresses are physical offsets into the OS RAM */
+        struct memphy_struct *mram = (caller && caller->krnl) ? caller->krnl->mram : NULL;
+
+        if (mram && mram->storage && mram->maxsz > 0) {
+            mem = (uint8_t*)mram->storage;
+            size = (uint64_t)mram->maxsz;
+        }
+    }
+
+    if (!mem || length > size || src_offset > size - length || dst_offset > size - length) {
+        printf("dpi_dma_copy: out of memory range: src=%llu, dst=%llu, len=%llu (memory size %llu)\n",
+               (unsigned long long) src_offset, (unsigned long long) dst_offset,
+               (unsigned long long) length, (unsigned long long) size);
+        return -1;
+    }
+
+    // shortcut: the chip copies forward, so dst inside (src, src+len) is refused; add a backward copy if a caller needs memmove
+    if (src_offset < dst_offset && dst_offset < src_offset + length) {
+        printf("dpi_dma_copy: overlapping copy not supported: src=%llu, dst=%llu, len=%llu\n",
+               (unsigned long long) src_offset, (unsigned long long) dst_offset,
+               (unsigned long long) length);
+        return -1;
+    }
+
+    sysbus_map(mem, size, dst_offset, length);
+
+    /* OS mode copies the process data as it is: no test pattern, no dumps */
+    if (!testbench)
+        return dpi_rtl_dma_copy(src_offset, dst_offset, length);
 
     printf("dpi_dma_copy: src=%llu, dst=%llu, len=%llu\n", 
 		    (unsigned long long) src_offset, 
 		    (unsigned long long) dst_offset,
 		    (unsigned long long) length);
 
-    uint8_t* psrc = (uint8_t*)src;
+    uint8_t* psrc = mem + src_offset;
     uint64_t pattern_length = (length <= 255) ? length : 255;
     
     for (uint64_t i = 0; i < length; i++) {
@@ -84,22 +122,8 @@ int dpi_dma_copy(struct pcb_t *caller, uint64_t src_offset, uint64_t dst_offset,
     }
 
     printf("Before copy:\n");
-    printf("  src[0] = 0x%02x, src[1] = 0x%02x\n"
-           "  src[2] = 0x%02x, src[3] = 0x%02x\n"
-           "  src[4] = 0x%02x, src[5] = 0x%02x\n"
-           "  src[6] = 0x%02x, src[7] = 0x%02x\n",
-           ((uint8_t*)src)[0], ((uint8_t*)src)[1],
-           ((uint8_t*)src)[2], ((uint8_t*)src)[3],
-           ((uint8_t*)src)[4], ((uint8_t*)src)[5],
-           ((uint8_t*)src)[6], ((uint8_t*)src)[7]);
-    printf("  dst[0] = 0x%02x, dst[1] = 0x%02x\n"
-           "  dst[2] = 0x%02x, dst[3] = 0x%02x\n"
-           "  dst[4] = 0x%02x, dst[5] = 0x%02x\n"
-           "  dst[6] = 0x%02x, dst[7] = 0x%02x\n",
-           ((uint8_t*)dst)[0], ((uint8_t*)dst)[1],
-           ((uint8_t*)dst)[2], ((uint8_t*)dst)[3],
-           ((uint8_t*)dst)[4], ((uint8_t*)dst)[5],
-           ((uint8_t*)dst)[6], ((uint8_t*)dst)[7]);
+    dump8("src", src_offset);
+    dump8("dst", dst_offset);
 
     printf("\nCalling RTL DMA...\n");
     
@@ -107,22 +131,8 @@ int dpi_dma_copy(struct pcb_t *caller, uint64_t src_offset, uint64_t dst_offset,
     int result = dpi_rtl_dma_copy(src_offset, dst_offset, length);
     
     printf("\nAfter copy:\n");
-    printf("  src[0] = 0x%02x, src[1] = 0x%02x\n"
-           "  src[2] = 0x%02x, src[3] = 0x%02x\n"
-           "  src[4] = 0x%02x, src[5] = 0x%02x\n"
-           "  src[6] = 0x%02x, src[7] = 0x%02x\n",
-           ((uint8_t*)src)[0], ((uint8_t*)src)[1],
-           ((uint8_t*)src)[2], ((uint8_t*)src)[3],
-           ((uint8_t*)src)[4], ((uint8_t*)src)[5],
-           ((uint8_t*)src)[6], ((uint8_t*)src)[7]);
-    printf("  dst[0] = 0x%02x, dst[1] = 0x%02x\n"
-           "  dst[2] = 0x%02x, dst[3] = 0x%02x\n"
-           "  dst[4] = 0x%02x, dst[5] = 0x%02x\n"
-           "  dst[6] = 0x%02x, dst[7] = 0x%02x\n",
-           ((uint8_t*)dst)[0], ((uint8_t*)dst)[1],
-           ((uint8_t*)dst)[2], ((uint8_t*)dst)[3],
-           ((uint8_t*)dst)[4], ((uint8_t*)dst)[5],
-           ((uint8_t*)dst)[6], ((uint8_t*)dst)[7]);
+    dump8("src", src_offset);
+    dump8("dst", dst_offset);
     
     return result;
 }
