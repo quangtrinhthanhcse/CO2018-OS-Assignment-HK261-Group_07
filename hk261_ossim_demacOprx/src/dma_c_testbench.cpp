@@ -21,6 +21,7 @@
 
 #include "sysbus.h"
 #include "dpi_rtl.h"
+#include "dma.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstdint>
@@ -29,6 +30,8 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
+#include <condition_variable>
+#include <deque>
 
 // Generated DPI functions from RTL
 #include <verilated.h>
@@ -102,7 +105,7 @@ int dpi_dma_copy(struct pcb_t *caller, uint64_t src_offset, uint64_t dst_offset,
         return -1;
     }
 
-    sysbus_map(mem, size, dst_offset, length);
+    sysbus_map(mem, size, src_offset, dst_offset, length);
 
     /* OS mode copies the process data as it is: no test pattern, no dumps */
     if (!testbench)
@@ -151,13 +154,68 @@ extern "C" int do_dma(struct pcb_t *caller,uint64_t source, uint64_t destination
     test_errors += dpi_dma_copy(caller, source, destination, length);
 
     /*
-     * TODO: This asynchronous implementation of DMA
-     *        DMA completion callback is not yet implemented in this testbench
+     * Synchronous on purpose: the OS calls it from the co-processor thread (dma_serve),
+     * and the chip itself calls dma_done_callback() when the transfer completes.
      */
-    // Install callback handler
-    //dma_done_callback();  // Call the callback to signal DMA completion
 
     return test_errors;
+}
+
+/* One queued transfer. The process may finish before it runs, so keep only what the bus needs */
+struct dma_req {
+    struct pcb_t owner;     // pid and krnl (the RAM binding) of the requesting process
+    uint64_t source, destination, length;
+    int last;               // final piece of its dma_memcpy: only it reports completion
+};
+
+static std::mutex dma_q_lock;
+static std::condition_variable dma_q_cv;
+static std::deque<dma_req> dma_q;
+static bool dma_q_closed = false;
+
+extern "C" int dma_submit(struct pcb_t *caller, uint64_t source, uint64_t destination, uint64_t length, int last) {
+    dma_req req = {};
+
+    req.owner.pid = caller->pid;
+    req.owner.krnl = caller->krnl;
+    req.source = source;
+    req.destination = destination;
+    req.length = length;
+    req.last = last;
+    {
+        std::lock_guard<std::mutex> guard(dma_q_lock);
+        if (dma_q_closed)
+            return -1;
+        dma_q.push_back(req);
+    }
+    dma_q_cv.notify_one();
+    return 0;
+}
+
+extern "C" void dma_serve(void) {
+    for (;;) {
+        dma_req req;
+        {
+            std::unique_lock<std::mutex> lock(dma_q_lock);
+            dma_q_cv.wait(lock, [] { return !dma_q.empty() || dma_q_closed; });
+            if (dma_q.empty())
+                return;
+            req = dma_q.front();
+            dma_q.pop_front();
+        }
+        // a failed transfer has already printed its own error line
+        sysbus_irq_enable(req.last);
+        do_dma(&req.owner, req.source, req.destination, req.length);
+        sysbus_irq_enable(1);
+    }
+}
+
+extern "C" void dma_stop(void) {
+    {
+        std::lock_guard<std::mutex> guard(dma_q_lock);
+        dma_q_closed = true;
+    }
+    dma_q_cv.notify_all();
 }
 
 #if DMA_MAIN == 1

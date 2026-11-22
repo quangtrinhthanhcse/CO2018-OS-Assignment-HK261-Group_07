@@ -33,6 +33,8 @@ static int g_bank_count = 0;
 // Memory the DMA chip addresses, set by sysbus_map() before each transfer
 static uint8_t* g_bus_mem = NULL;
 static uint64_t g_bus_size = 0;
+static uint64_t g_bus_rd_start = 0;
+static uint64_t g_bus_rd_end = 0;
 static uint64_t g_bus_wr_start = 0;
 static uint64_t g_bus_wr_end = 0;
 
@@ -113,9 +115,11 @@ size_t memory_bank_get_size() {
     return g_banks[0].size;
 }
 
-void sysbus_map(void *mem, uint64_t size, uint64_t dst, uint64_t len) {
+void sysbus_map(void *mem, uint64_t size, uint64_t src, uint64_t dst, uint64_t len) {
     g_bus_mem = (uint8_t*)mem;
     g_bus_size = size;
+    g_bus_rd_start = src;
+    g_bus_rd_end = src + len;
     g_bus_wr_start = dst;
     g_bus_wr_end = dst + len;
 }
@@ -131,10 +135,13 @@ extern "C" {
 int dpi_bank_read32_legacy(long long offset) {
     uint32_t value = 0;
 
-    // Byte by byte (spec 2.3.2): same byte order on any host, bytes past the memory end read as 0
+    // Byte by byte (spec 2.3.2): same byte order on any host; bytes outside the transfer
+    // (source, or destination for the chip's read-back) and past the memory end read as 0
     for (int i = 0; i < 4; i++) {
         uint64_t addr = (uint64_t)offset + i;
-        if (g_bus_mem && addr < g_bus_size)
+        if (g_bus_mem && addr < g_bus_size &&
+            ((addr >= g_bus_rd_start && addr < g_bus_rd_end) ||
+             (addr >= g_bus_wr_start && addr < g_bus_wr_end)))
             value |= (uint32_t)g_bus_mem[addr] << (8 * i);
     }
     return (int)value;
@@ -155,11 +162,19 @@ int dpi_bank_write32_legacy(long long offset, int value) {
 }
 
 
+static int g_irq_enable = 1;
+
+void sysbus_irq_enable(int on) {
+    g_irq_enable = on;
+}
+
 /**
  * DPI Callback: Called from RTL when DMA transfer completes
  */
 void dma_done_callback(void)
 {
+    if (!g_irq_enable)
+        return;   // not the last piece of its dma_memcpy
     printf("DMA completed\n");
     fflush(stdout);   // keep ordering vs. printf_IMPORTANT output
 }
