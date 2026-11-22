@@ -26,6 +26,7 @@
 
 #include "sysbus.h"
 #include "dpi_rtl.h"
+#include "dma.h"
 
 static int time_slot;
 static int num_cpus;
@@ -120,19 +121,16 @@ static void * cpu_routine(void * args) {
 
 static void * co_processor(void *arg) {
     (void)arg;
-    /* TODO: Initialize the internal Verilator RTL simulation.
-	 *       This is necessary to ensure that the RTL simulation is ready for DPI calls.
-      */
-    if (rtl_dma_init_simulation() != 0) {
-        printf("Cannot initialize RTL simulation\n");
-        return (void*)1;
-    }
-	
-	/* TODO: This asynchronous implementation of DMA
-     *        DMA completion callback is not yet implemented in this testbench
+    /* Initialize the internal Verilator RTL simulation.
+     * This is necessary to ensure that the RTL simulation is ready for DPI calls.
      */
-    // Install callback handler
-    //dma_done_callback();  // Call the callback to signal DMA completion
+    if (rtl_dma_init_simulation() != 0)
+        printf("Cannot initialize RTL simulation\n");
+
+    /* Asynchronous DMA: run the transfers the CPUs queue until main() stops the queue.
+     * Without a chip each transfer fails with its own line, so nothing waits forever.
+     */
+    dma_serve();
     return NULL;
 }
 
@@ -321,6 +319,10 @@ int main(int argc, char * argv[]) {
 		pthread_join(cpu[i], NULL);
 	}
 	pthread_join(ld, NULL);
+
+	/* No CPU is left to issue DMA: let the co-processor finish its queue */
+	dma_stop();
+	pthread_join(*dma, NULL);
 
 	/* Stop timer */
 	stop_timer();
