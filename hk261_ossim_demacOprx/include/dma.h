@@ -30,6 +30,17 @@ struct pcb_t;
  */
 int do_dma(struct pcb_t *caller, uint64_t source, uint64_t destination, uint64_t length);
 
+/*
+ * Asynchronous DMA:
+ * dma_submit - queue one transfer (do_dma arguments) for the co-processor and return at once;
+ *              last: the final piece of one dma_memcpy, the only one that reports completion
+ * dma_serve - run the queued transfers in order; the co-processor thread calls it
+ * dma_stop - take no more requests: dma_serve returns once the queue is empty
+ */
+int dma_submit(struct pcb_t *caller, uint64_t source, uint64_t destination, uint64_t length, int last);
+void dma_serve(void);
+void dma_stop(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -5,6 +5,24 @@ Sơ đồ luồng chi tiết xem [dma_flow.md](dma_flow.md).
 
 ---
 
+## 0. Mô tả ngắn: DMA system bus
+
+> Đây là thiết kế đích. Code A6-4 (nối bus vào `mram->storage`) và A6-5 (`libmem_dma_memcpy` gọi `do_dma`) chưa làm; xong thì đối chiếu lại từng câu.
+
+**Tiếng Việt**
+
+Khi tiến trình chạy lệnh `dma_memcpy`, kernel (`libmem_dma_memcpy`) dịch vùng nguồn và vùng đích ra địa chỉ vật lý, rồi giao cho chip DMA một descriptor {nguồn, đích, độ dài} và bật `ch_enable`.
+Chip DMA không đi qua MMU mà đọc ghi thẳng RAM qua bus hệ thống (`sysbus.c`), nơi mỗi offset vật lý được đổi thành con trỏ vào RAM của hệ điều hành (`mram->storage`), mỗi lần 4 byte.
+Chép xong, chip bật `ch_done` và gọi `dma_done_callback()` để báo hoàn tất, nên CPU chỉ cần giao việc rồi chạy tiếp tiến trình khác thay vì tự chép từng byte.
+
+**English**
+
+When a process issues `dma_memcpy`, the kernel (`libmem_dma_memcpy`) translates the source and destination regions to physical addresses and hands the DMA chip a descriptor {source, destination, length}, then raises `ch_enable`.
+The DMA chip bypasses the MMU and reads/writes RAM directly over the system bus (`sysbus.c`), which maps each physical offset to a pointer into the OS RAM (`mram->storage`), 4 bytes per transfer.
+When the copy finishes, the chip raises `ch_done` and calls `dma_done_callback()` to signal completion, so the CPU only issues the request and keeps running other processes instead of copying byte by byte.
+
+---
+
 ## 1. Hoạt động bất đồng bộ (Asynchronous operation)
 
 ### 1.1 Vì sao cần DMA
@@ -78,6 +96,10 @@ DMA **không có MMU** và không biết bảng trang của tiến trình nào. 
 
 **Hệ quả quan trọng:** trước khi giao việc cho DMA, phần mềm phải **tự dịch địa chỉ ảo ra địa chỉ vật lý**.
 Đó là việc của `libmem_dma_memcpy`: từ số vùng nhớ (ví dụ lệnh `dma_memcpy 1 2 0 4` trong `input/proc/m2s` chép từ vùng 1 sang vùng 2), tìm địa chỉ bắt đầu của vùng, tra bảng trang để ra `fpn`, rồi tính `fpn * PAGESZ + offset` để đưa vào descriptor.
+
+**Quan hệ với bố cục bộ nhớ macOS của nhóm:** nhóm dùng bố cục vùng nhớ ảo macOS (Phụ lục B của đề: `__PAGEZERO` ở địa chỉ 0, `__TEXT`, `__DATA`, heap `MALLOC_*`, stack ở địa chỉ cao).
+Bố cục này chỉ quyết định **địa chỉ ảo** của từng vùng; DMA chỉ thấy **địa chỉ vật lý**, nên phần DMA và bus không thay đổi theo bố cục.
+Chỗ duy nhất bố cục ảnh hưởng là bước dịch trong `libmem_dma_memcpy`: vùng user (ví dụ vùng heap) tra bảng trang của tiến trình, vùng kernel (cấp bằng `kmalloc`) tra bảng trang kernel `krnl_pgd`.
 
 **Vì sao kernel memory phải liên tục về mặt vật lý:** descriptor chỉ chứa *một* địa chỉ bắt đầu và *một* độ dài, nên DMA hiểu vùng cần chép là một khúc liên tục trên RAM vật lý.
 Đề yêu cầu `kmalloc` cấp vùng **liên tục về mặt vật lý** (mục 1.4, lệnh `kmalloc`); một lợi ích trực tiếp là vùng kernel dùng được ngay làm nguồn/đích DMA bằng một descriptor duy nhất (đây là nhóm tự suy luận, đề không nói thẳng).

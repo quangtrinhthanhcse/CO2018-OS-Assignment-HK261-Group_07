@@ -661,17 +661,69 @@ out:
  */
 int libmem_dma_memcpy(struct pcb_t *caller, uint32_t src, uint32_t dst, uint32_t offset, uint32_t size)
 {
-  /* TODO: provide DMA mempy */
-
-  //struct krnl_t *krnl = caller->krnl;
-
   /*
-   *  TODO: provide asynchronous dma memcpy
-   *        handling the dma_done_callback
+   * The DMA chip only sees bus (physical) addresses and bypasses the MMU:
+   * translate both regions page by page here, queue the pieces and return.
    */
-  //do_dma(caller, (uint64_t) src, (uint64_t) dst, (uint64_t) size);
-  //krnl->...
-  //krnl->...
+#ifdef MM64
+  const addr_t pagesz = PAGING64_PAGESZ;   /* RAM frames and page tables are 4 KB in 64-bit mode */
+#else
+  const addr_t pagesz = PAGING_PAGESZ;
+#endif
+  uint32_t rgid[2] = { src, dst };
+  struct vm_rg_struct *rg[2] = { NULL, NULL };
+  addr_t va, pa[2], done, len, rgsz;
+  int i, pass, fpn;
+
+  for (i = 0; i < 2; i++)
+  {
+    /* shortcut: user regions only, so a kmalloc region is refused;
+     * look up the kernel region table here once kmalloc keeps one */
+    if (rgid[i] < PAGING_MAX_SYMTBL_SZ)
+      rg[i] = &caller->mm->symrgtbl[rgid[i]];
+    if (rg[i] == NULL || rg[i]->rg_end <= rg[i]->rg_start)
+    {
+      printf("dma_memcpy: region %u is not an allocated user region\n", rgid[i]);
+      return -1;
+    }
+    rgsz = rg[i]->rg_end - rg[i]->rg_start;
+    if (offset > rgsz || size > rgsz - offset)
+    {
+      printf("dma_memcpy: offset %u + size %u is past the end of region %u\n",
+             offset, size, rgid[i]);
+      return -1;
+    }
+  }
+
+  /* Pass 0 checks every page, pass 1 queues: a page that cannot be used queues nothing */
+  for (pass = 0; pass < 2; pass++)
+    for (done = 0; done < size; done += len)
+    {
+      len = size - done;
+      for (i = 0; i < 2; i++)
+      {
+        va = rg[i]->rg_start + offset + done;
+        /* The chip cannot take a page fault: bring the page into RAM before translating */
+        if (pg_getpage(caller->mm, va / pagesz, &fpn, caller) != 0 ||
+            !PAGING_PAGE_PRESENT(pte_get_entry(caller->mm, va / pagesz, caller)))
+        {
+          printf("dma_memcpy: page not in RAM: region %u, offset %lu\n",
+                 rgid[i], (unsigned long)(offset + done));
+          return -1;
+        }
+        pa[i] = (addr_t)fpn * pagesz + va % pagesz;
+        /* One transfer stays inside one page of each region */
+        if (len > pagesz - va % pagesz)
+          len = pagesz - va % pagesz;
+      }
+      /*
+       * shortcut: the process keeps running and its frames are not pinned, so nothing may
+       * write these bytes, or swap out or free their pages, before "DMA completed";
+       * park the process in cpu_routine and skip DMA pages in find_victim_page when needed
+       */
+      if (pass == 1 && dma_submit(caller, pa[0], pa[1], len, done + len == size) != 0)
+        return -1;
+    }
 
   return 0;
 }

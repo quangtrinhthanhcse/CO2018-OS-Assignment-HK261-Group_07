@@ -43,11 +43,20 @@ size_t memory_bank_get_size(void);
 // Check if memory bank is initialized
 int memory_bank_is_available(void);
 
+// Map memory (testbench bank or OS RAM) at bus address 0 for one transfer of len bytes;
+// the 32-bit bus has no byte enables: bytes outside the transfer read as 0,
+// writes outside [dst, dst + len) are dropped
+void sysbus_map(void *mem, uint64_t size, uint64_t src, uint64_t dst, uint64_t len);
+
 // DPI Callback: Called from RTL when DMA read access
 int dpi_bank_read32_legacy(long long offset);
 
 // DPI Callback: Called from RTL when DMA write access
 int dpi_bank_write32_legacy(long long offset, int value);
+
+// Completion reports on (1, default) or off (0): off while the chip copies a piece
+// that is not the last one of its dma_memcpy
+void sysbus_irq_enable(int on);
 
 // DPI Callback: Called from RTL when DMA transfer completes
 void dma_done_callback(void);
