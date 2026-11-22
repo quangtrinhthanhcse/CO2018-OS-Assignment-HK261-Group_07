@@ -728,6 +728,45 @@ int libmem_dma_memcpy(struct pcb_t *caller, uint32_t src, uint32_t dst, uint32_t
   return 0;
 }
 
+/* kmem_rg_len - size in bytes of kernel region (pid,rgid), -1 if none */
+static int kmem_rg_len(struct pcb_t *caller, int rgid, uint64_t *len)
+{
+  int ret = -1;
+  if (caller == NULL || rgid < 0 || rgid >= PAGING_MAX_SYMTBL_SZ)
+    return -1;
+  pthread_mutex_lock(&kmm_lock);
+  struct kmem_rg *r = kmem_find_rg(caller->pid, rgid);
+  if (r != NULL)
+  {
+    *len = (uint64_t)(r->rg.rg_end - r->rg.rg_start);
+    ret = 0;
+  }
+  pthread_mutex_unlock(&kmm_lock);
+  return ret;
+}
+
+/* umem_rg_len - size in bytes of user region rgid of the caller, -1 if none */
+static int umem_rg_len(struct pcb_t *caller, int rgid, uint64_t *len)
+{
+  int ret = -1;
+  if (caller == NULL || caller->mm == NULL || rgid < 0 || rgid >= PAGING_MAX_SYMTBL_SZ)
+    return -1;
+  pthread_mutex_lock(&mmvm_lock);
+  struct vm_rg_struct *rg = &caller->mm->symrgtbl[rgid];
+  if (rg->rg_end > rg->rg_start)
+  {
+    *len = (uint64_t)(rg->rg_end - rg->rg_start);
+    ret = 0;
+  }
+  pthread_mutex_unlock(&mmvm_lock);
+  return ret;
+}
+
+/* in_range - [offset, offset+size) lies inside a region of length len (overflow safe) */
+static int in_range(uint64_t len, uint32_t offset, uint32_t size)
+{
+  return (uint64_t)size <= len && (uint64_t)offset <= len - (uint64_t)size;
+}
 
 int libkmem_copy_from_user(struct pcb_t *caller, uint32_t source, uint32_t destination, uint32_t offset, uint32_t size)
 {
@@ -738,6 +777,29 @@ int libkmem_copy_from_user(struct pcb_t *caller, uint32_t source, uint32_t desti
    */
   //__read_user_mem(...)
   //__write_kernel_mem(...);
+
+  uint64_t ulen, klen;
+
+  if (caller == NULL || caller->krnl == NULL)
+    return -1;
+  if (source >= PAGING_MAX_SYMTBL_SZ || destination >= PAGING_MAX_SYMTBL_SZ)
+    return -1;
+  if (size == 0)
+    return 0;
+
+  if (umem_rg_len(caller, (int)source, &ulen) != 0 || !in_range(ulen, offset, size))
+    return -1;
+  if (kmem_rg_len(caller, (int)destination, &klen) != 0 || !in_range(klen, offset, size))
+    return -1;
+
+  for (uint32_t i = 0; i < size; i++)
+  {
+    BYTE data;
+    if (__read_user_mem(caller, 0, (int)source, (addr_t)offset + i, &data) != 0)
+      return -1;
+    if (__write_kernel_mem(caller, 0, (int)destination, (addr_t)offset + i, data) != 0)
+      return -1;
+  }
 
   return 0;
 }
@@ -751,6 +813,29 @@ int libkmem_copy_to_user(struct pcb_t *caller, uint32_t source, uint32_t destina
    */
   //__read_kernel_mem(...)
   //__write_user_mem(...);
+
+  uint64_t klen, ulen;
+
+  if (caller == NULL || caller->krnl == NULL)
+    return -1;
+  if (source >= PAGING_MAX_SYMTBL_SZ || destination >= PAGING_MAX_SYMTBL_SZ)
+    return -1;
+  if (size == 0)
+    return 1;               
+
+  if (kmem_rg_len(caller, (int)source, &klen) != 0 || !in_range(klen, offset, size))
+    return -1;
+  if (umem_rg_len(caller, (int)destination, &ulen) != 0 || !in_range(ulen, offset, size))
+    return -1;
+
+  for (uint32_t i = 0; i < size; i++)
+  {
+    BYTE data;
+    if (__read_kernel_mem(caller, 0, (int)source, (addr_t)offset + i, &data) != 0)
+      return -1;
+    if (__write_user_mem(caller, 0, (int)destination, (addr_t)offset + i, data) != 0)
+      return -1;
+  }
 
   return 1;
 }
@@ -768,7 +853,7 @@ int __read_kernel_mem(struct pcb_t *caller, int vmaid, int rgid, addr_t offset, 
   /* TODO: provide OS memory operator for kernel memory region */
   //krnl->krnl_pgd ... or krnl->pgd ... based on kmem implementation strategy
 
-  return 0;
+  return kmem_access(caller, rgid, offset, 0, data, 0);
 }
 
 /*__write_kernel_mem - write a kernel region memory
@@ -783,7 +868,7 @@ int __write_kernel_mem(struct pcb_t *caller, int vmaid, int rgid, addr_t offset,
   /* TODO: provide OS memory operator for kernel memory region */
   //krnl->krnl_pgd ... or krnl->pgd ... based on kmem implementation strategy
 
-  return 0;
+  return kmem_access(caller, rgid, offset, 1, NULL, value);
 }
 
 /*__read_user_mem - read value in user region memory
@@ -798,7 +883,18 @@ int __read_user_mem(struct pcb_t *caller, int vmaid, int rgid, addr_t offset, BY
   /* TODO: provide OS level management user memory access */
   //krnl->pgd ... or krnl->krnl_pgd  ... based on kmem implementation strategy
 
-   return 0;
+   if (data == NULL)
+    return -1;
+
+  pthread_mutex_lock(&mmvm_lock);   /* pg_getpage may swap pages */
+
+  int ret = -1;
+  struct vm_rg_struct *rg = umem_region(caller, vmaid, rgid, offset);
+  if (rg != NULL)
+    ret = pg_getval(caller->mm, (int)(rg->rg_start + offset), data, caller);
+
+  pthread_mutex_unlock(&mmvm_lock);
+  return ret;
 }
 
 
@@ -814,7 +910,15 @@ int __write_user_mem(struct pcb_t *caller, int vmaid, int rgid, addr_t offset, B
   /* TODO: provide OS level management user memory access */
   //krnl->pgd ... or krnl->krnl_pgd  ... based on kmem implementation strategy
 
-  return 0;
+  pthread_mutex_lock(&mmvm_lock);
+
+  int ret = -1;
+  struct vm_rg_struct *rg = umem_region(caller, vmaid, rgid, offset);
+  if (rg != NULL)
+    ret = pg_setval(caller->mm, (int)(rg->rg_start + offset), value, caller);
+
+  pthread_mutex_unlock(&mmvm_lock);
+  return ret;
 }
 
 
