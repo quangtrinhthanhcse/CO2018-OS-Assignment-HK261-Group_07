@@ -436,6 +436,101 @@ int libwrite(
   return val;
 }
 
+#ifdef MM64
+#define KMEM_PAGESZ  ((addr_t)PAGING64_PAGESZ)
+#define KMEM_MAX_PGN ((addr_t)PAGING64_MAX_PGN)
+typedef addr_t kpte_t;
+#else
+#define KMEM_PAGESZ  ((addr_t)PAGING_PAGESZ)
+#define KMEM_MAX_PGN ((addr_t)PAGING_MAX_PGN)
+typedef uint32_t kpte_t;
+#endif
+#define KMEM_LIMIT         (KMEM_MAX_PGN * KMEM_PAGESZ)
+#define KMEM_ALIGN_UP(x)   ((((x) + KMEM_PAGESZ - 1) / KMEM_PAGESZ) * KMEM_PAGESZ)
+#define KMEM_MAX_RG        128 
+
+struct kmem_rg {
+  int used;
+  uint32_t pid;
+  int rgid;
+  struct vm_rg_struct rg;
+  addr_t fpn0;
+  addr_t npg;
+};
+
+static struct kmem_rg ksymrgtbl[KMEM_MAX_RG];
+static addr_t kmem_top = 0;
+
+static kpte_t *kwalk(struct krnl_t *krnl, addr_t va)
+{
+  addr_t pgn = va / KMEM_PAGESZ;
+  if (krnl == NULL || krnl->krnl_pgd == NULL || pgn >= KMEM_MAX_PGN)
+    return NULL;
+  return (kpte_t *)&krnl->krnl_pgd[pgn];
+}
+
+struct kmem_rg *kmem_find_rg(uint32_t pid, int rgid)
+{
+  for (int i = 0; i < KMEM_MAX_RG; i++)
+    if (ksymrgtbl[i].used && ksymrgtbl[i].pid == pid && ksymrgtbl[i].rgid == rgid)
+      return &ksymrgtbl[i];
+  return NULL;
+}
+
+int kmem_va2pa(struct krnl_t *krnl, addr_t va, addr_t *pa)
+{
+  kpte_t *pte = kwalk(krnl, va);
+  if (pte == NULL || !PAGING_PAGE_PRESENT(*pte))
+    return -1;
+  *pa = (addr_t)PAGING_PTE_FPN(*pte) * KMEM_PAGESZ + (va % KMEM_PAGESZ);
+  return 0;
+}
+
+static int kmem_take_contig_frames(struct memphy_struct *mp, addr_t npg, addr_t *first)
+{
+  addr_t nfr = (addr_t)mp->maxsz / KMEM_PAGESZ;
+  if (npg == 0 || npg > nfr)
+    return -1;
+
+  unsigned char *isfree = calloc(nfr, 1);
+  if (isfree == NULL)
+    return -1;
+
+  for (struct framephy_struct *f = mp->free_fp_list; f != NULL; f = f->fp_next)
+    if (f->fpn < nfr)
+      isfree[f->fpn] = 1;
+
+  addr_t run = 0, s = 0;
+  int found = 0;
+  for (addr_t i = 0; i < nfr; i++)
+  {
+    run = isfree[i] ? run + 1 : 0;
+    if (run == npg)
+    {
+      s = i + 1 - npg;
+      found = 1;
+      break;
+    }
+  }
+  free(isfree);
+  if (!found)
+    return -1;
+
+  struct framephy_struct **pp = &mp->free_fp_list;
+  while (*pp != NULL)
+  {
+    struct framephy_struct *f = *pp;
+    if (f->fpn >= s && f->fpn < s + npg)
+    {
+      *pp = f->fp_next;
+      free(f);
+    }
+    else
+      pp = &f->fp_next;
+  }
+  *first = s;
+  return 0;
+}
 
 /*libkmem_malloc- alloc region memory in kmem
  *@caller: caller
@@ -455,7 +550,20 @@ int libkmem_malloc(struct pcb_t * caller, uint32_t size, uint32_t reg_index)
   /* 
    * TODO: provide OS kmem allocation validation
    */
+  addr_t addr = 0;
+  if (caller == NULL || caller->krnl == NULL)
+    return -1;
+  if (size == 0 || reg_index >= PAGING_MAX_SYMTBL_SZ)
+    return -1;
 
+  /* kernel memory is not tied to a user VMA; vmaid 0 is only a tag */
+  if (__kmalloc(caller, 0, (int)reg_index, (addr_t)size, &addr) == (addr_t)-1)
+    return -1;
+
+#ifdef KMEM_DEBUG
+  printf("kmalloc: pid=%u rgid=%u size=%u -> kernel addr %lu\n",
+         caller->pid, reg_index, size, (unsigned long)addr);
+#endif
   return 0;
 }
 
@@ -486,63 +594,60 @@ addr_t __kmalloc(struct pcb_t *caller, int vmaid, int rgid, addr_t size, addr_t 
     return (addr_t)-1;
 
   pthread_mutex_lock(&kmm_lock);
+  pthread_mutex_lock(&mmvm_lock);
 
-  if (ksymrgtbl[rgid].rg_end != ksymrgtbl[rgid].rg_start)
-  {
-    pthread_mutex_unlock(&kmm_lock);
-    return (addr_t)-1;
-  }
+  addr_t ret = (addr_t)-1;
+  struct kmem_rg *slot = NULL;
+
+  if (kmem_top == 0)
+    kmem_top = KMEM_PAGESZ;
+
+  if (kmem_find_rg(caller->pid, rgid) != NULL)
+    goto out;
+
+  for (int i = 0; i < KMEM_MAX_RG; i++)
+    if (!ksymrgtbl[i].used) { slot = &ksymrgtbl[i]; break; }
+  if (slot == NULL)
+    goto out;
 
   addr_t start = kmem_top;
   addr_t end = start + size;
   addr_t aligned_end = KMEM_ALIGN_UP(end);
-
   if (end < start || aligned_end < end || aligned_end > KMEM_LIMIT)
+    goto out;
+
+  addr_t npg = (aligned_end - start) / KMEM_PAGESZ;
+  addr_t fpn0;
+  if (kmem_take_contig_frames(krnl->mram, npg, &fpn0) != 0)
+    goto out;
+
+  for (addr_t k = 0; k < npg; k++)
   {
-    pthread_mutex_unlock(&kmm_lock);
-    return (addr_t)-1;
-  }
-
-  addr_t va;
-  for (va = start; va < end; va += KMEM_PAGESZ)
-  {
-    addr_t fpn = 0;
-    kpte_t *pte = kwalk(krnl, va, 1);
-
-    if (pte == NULL)
-      goto rollback;
-    if (MEMPHY_get_freefp(krnl->mram, &fpn) != 0)
-      goto rollback;
-
+    kpte_t *pte = kwalk(krnl, start + k * KMEM_PAGESZ);
     *pte = 0;
     SETBIT(*pte, PAGING_PTE_PRESENT_MASK);
     CLRBIT(*pte, PAGING_PTE_SWAPPED_MASK);
-    SETVAL(*pte, fpn, PAGING_PTE_FPN_MASK, PAGING_PTE_FPN_LOBIT);
+    SETVAL(*pte, fpn0 + k, PAGING_PTE_FPN_MASK, PAGING_PTE_FPN_LOBIT);
   }
 
   kmem_top = aligned_end;
-  ksymrgtbl[rgid].vmaid = vmaid;
-  ksymrgtbl[rgid].rg_start = start;
-  ksymrgtbl[rgid].rg_end = end;
-  ksymrgtbl[rgid].rg_next = NULL;
+  slot->used = 1;
+  slot->pid = caller->pid;
+  slot->rgid = rgid;
+  slot->rg.vmaid = vmaid;
+  slot->rg.rg_start = start;
+  slot->rg.rg_end = end;
+  slot->rg.rg_next = NULL;
+  slot->fpn0 = fpn0;
+  slot->npg = npg;
+
   *alloc_addr = start;
+  ret = 0;
 
+out:
+  pthread_mutex_unlock(&mmvm_lock);
   pthread_mutex_unlock(&kmm_lock);
-  return 0;
-
-rollback:
-  for (addr_t u = start; u < va; u += KMEM_PAGESZ)
-  {
-    kpte_t *p = kwalk(krnl, u, 0);
-    if (p != NULL)
-    {
-      MEMPHY_put_freefp(krnl->mram, PAGING_FPN(*p));
-      *p = 0;
-    }
-  }
-  pthread_mutex_unlock(&kmm_lock);
-  return (addr_t)-1;
- 
+  return ret;
 }
 
 
