@@ -840,6 +840,61 @@ int libkmem_copy_to_user(struct pcb_t *caller, uint32_t source, uint32_t destina
   return 1;
 }
 
+/* kmem_access - one byte of a kernel region, read (is_write=0) or write. */
+static int kmem_access(struct pcb_t *caller, int rgid, addr_t offset,
+                       int is_write, BYTE *data, BYTE value)
+{
+  if (caller == NULL || caller->krnl == NULL)
+    return -1;
+  if (rgid < 0 || rgid >= PAGING_MAX_SYMTBL_SZ)
+    return -1;
+  if (!is_write && data == NULL)
+    return -1;
+
+  struct krnl_t *krnl = caller->krnl;
+  if (krnl->mram == NULL || krnl->krnl_pgd == NULL)
+    return -1;
+
+  int ret = -1;
+  addr_t pa;
+
+  pthread_mutex_lock(&kmm_lock);
+
+  struct kmem_rg *r = kmem_find_rg(caller->pid, rgid);
+  if (r != NULL &&
+      offset < r->rg.rg_end - r->rg.rg_start &&
+      kmem_va2pa(krnl, r->rg.rg_start + offset, &pa) == 0 &&
+      pa < (addr_t)krnl->mram->maxsz) 
+  {
+    if (is_write)
+      ret = MEMPHY_write(krnl->mram, pa, value);
+    else
+      ret = MEMPHY_read(krnl->mram, pa, data);
+  }
+
+  pthread_mutex_unlock(&kmm_lock);
+  return ret;
+}
+
+/* umem_region - validated user region of caller (NULL if invalid).
+ * Caller must hold mmvm_lock. */
+static struct vm_rg_struct *umem_region(struct pcb_t *caller, int vmaid,
+                                        int rgid, addr_t offset)
+{
+  if (caller == NULL || caller->mm == NULL || caller->krnl == NULL)
+    return NULL;
+  if (rgid < 0 || rgid >= PAGING_MAX_SYMTBL_SZ)
+    return NULL;
+  if (get_vma_by_num(caller->mm, vmaid) == NULL)
+    return NULL;
+
+  struct vm_rg_struct *rg = &caller->mm->symrgtbl[rgid];
+  if (rg->rg_end <= rg->rg_start)
+    return NULL;
+  if (offset >= rg->rg_end - rg->rg_start)
+    return NULL;
+  return rg;
+}
 
 /*__read_kernel_mem - read value in kernel region memory
  *@caller: caller
