@@ -49,6 +49,10 @@ void init_scheduler(void) {
 	pthread_mutex_init(&queue_lock, NULL);
 }
 
+void finish_scheduler(void) {
+	pthread_mutex_destroy(&queue_lock);
+}
+
 #ifdef MLQ_SCHED
 /* 
  *  Stateful design for routine calling
@@ -101,9 +105,14 @@ void put_mlq_proc(struct pcb_t * proc) {
 	if (proc == NULL) {
 		return;
 	}
-	proc->krnl->ready_queue = &ready_queue;
-	proc->krnl->mlq_ready_queue = mlq_ready_queue;
-	proc->krnl->running_list = &running_list;
+	if (proc->prio >= MAX_PRIO) {
+		return;
+	}
+	if (proc->krnl != NULL) {
+		proc->krnl->ready_queue = &ready_queue;
+		proc->krnl->mlq_ready_queue = mlq_ready_queue;
+		proc->krnl->running_list = &running_list;
+	}
 
 	/* TODO: put running proc to running_list 
 	 *       It worth to protect by a mechanism.
@@ -120,9 +129,14 @@ void add_mlq_proc(struct pcb_t * proc) {
 	if (proc == NULL) {
 		return;
 	}
-	proc->krnl->ready_queue = &ready_queue;
-	proc->krnl->mlq_ready_queue = mlq_ready_queue;
-	proc->krnl->running_list = &running_list;
+	if (proc->prio >= MAX_PRIO) {
+		return;
+	}
+	if (proc->krnl != NULL) {
+		proc->krnl->ready_queue = &ready_queue;
+		proc->krnl->mlq_ready_queue = mlq_ready_queue;
+		proc->krnl->running_list = &running_list;
+	}
 
 	/* TODO: put running proc to running_list
 	 *       It worth to protect by a mechanism.
@@ -171,8 +185,10 @@ void put_proc(struct pcb_t * proc) {
 	if (proc == NULL) {
 		return;
 	}
-	proc->krnl->ready_queue = &ready_queue;
-	proc->krnl->running_list = &running_list;
+	if (proc->krnl != NULL) {
+		proc->krnl->ready_queue = &ready_queue;
+		proc->krnl->running_list = &running_list;
+	}
 
 	/* TODO: put running proc to running_list 
 	 *       It worth to protect by a mechanism.
@@ -189,8 +205,10 @@ void add_proc(struct pcb_t * proc) {
 	if (proc == NULL) {
 		return;
 	}
-	proc->krnl->ready_queue = &ready_queue;
-	proc->krnl->running_list = &running_list;
+	if (proc->krnl != NULL) {
+		proc->krnl->ready_queue = &ready_queue;
+		proc->krnl->running_list = &running_list;
+	}
 
 	/* TODO: put running proc to running_list 
 	 *       It worth to protect by a mechanism.
