@@ -71,41 +71,63 @@ Hệ thống hỗ trợ `MAX_PRIO = 140` mức ưu tiên (từ `0` đến `139`,
 
 ### 1.2. Biểu đồ Gantt và Phân tích Kết quả Kiểm thử (`sched`, `sched_0`, `sched_1`)
 
+#### 1.2.0. Bảng quy định định mức khe thời gian (`slot`) theo độ ưu tiên (`priority`)
+Trong bộ lập lịch MLQ (`MAX_PRIO = 140`, cấu hình tại `include/os-cfg.h`), mỗi mức ưu tiên `prio` $\in [0, 139]$ được khởi tạo định mức số lượt lấy tiến trình (`slot[prio]`) trong một chu kỳ lập lịch theo công thức:
+$$\text{slot}[\text{prio}] = \text{MAX\_PRIO} - \text{prio} = 140 - \text{prio}$$
+Mỗi lần một tiến trình ở hàng đợi `mlq_ready_queue[prio]` được hàm `get_mlq_proc()` lấy ra cấp cho CPU (và chạy tối đa `time_slice` đơn vị thời gian), giá trị `slot[prio]` giảm đi `1`.
+
+| Mức độ ưu tiên (`prio`) | Hàng đợi tương ứng | Định mức `slot` ban đầu (`140 - prio`) | Thời gian CPU tối đa / chu kỳ (`slot` $\times$ `time_slice`) | Các kịch bản kiểm thử sử dụng mức `prio` này |
+| :-: | :---: | :-: | :---: | :--- |
+| **`0`** *(Cao nhất)* | `mlq_ready_queue[0]` | **140** | $140 \times \text{time\_slice}$ | `sched` (P1, P4), `sched_0` (P3, P4), `sched_1` (P2, P3, P4, P5) |
+| **`1`** | `mlq_ready_queue[1]` | **139** | $139 \times \text{time\_slice}$ | `sched` (P2, P3) |
+| **`2`** | `mlq_ready_queue[2]` | **138** | $138 \times \text{time\_slice}$ | - |
+| **`3`** | `mlq_ready_queue[3]` | **137** | $137 \times \text{time\_slice}$ | - |
+| **`4`** | `mlq_ready_queue[4]` | **136** | $136 \times \text{time\_slice}$ | `sched_0` (P1, P2), `sched_1` (P1) |
+| $\dots$ | $\dots$ | $\dots$ | $\dots$ | $\dots$ |
+| **`15`** | `mlq_ready_queue[15]` | **125** | $125 \times \text{time\_slice}$ | `os_0_mlq_paging`, `os_1_mlq_paging`, `os_2_mlq_paging` |
+| **`38`** | `mlq_ready_queue[38]` | **102** | $102 \times \text{time\_slice}$ | `os_1_mlq_paging`, `os_2_mlq_paging` |
+| **`39`** | `mlq_ready_queue[39]` | **101** | $101 \times \text{time\_slice}$ | `os_1_mlq_paging`, `os_2_mlq_paging` |
+| **`120`** | `mlq_ready_queue[120]` | **20** | $20 \times \text{time\_slice}$ | `os_1_mlq_paging`, `os_2_mlq_paging` |
+| **`130`** | `mlq_ready_queue[130]` | **10** | $10 \times \text{time\_slice}$ | `os_1_mlq_paging` |
+| **`139`** *(Thấp nhất)* | `mlq_ready_queue[139]` | **1** | $1 \times \text{time\_slice}$ | - |
+
+---
+
 #### 1.2.1. Kịch bản kiểm thử 1: `input/sched` (Đa CPU: 2 CPU, Time slice = 4)
 
 **Cấu hình đầu vào (`input/sched`):**
 - `time_slice = 4`, `num_cpus = 2`, `num_processes = 4`
-- Danh sách tiến trình nạp vào:
+- Danh sách tiến trình nạp vào và biến thiên `slot` theo `prio`:
 
-| PID | Chương trình | Thời điểm nạp (`start_time`) | Số lệnh (`size` - toàn bộ `calc`) | Độ ưu tiên (`prio`) | Định mức `slot` ban đầu |
-| :-: | :---: | :-: | :-: | :-: | :-: |
-| **P1** | `p2s` | Slot 0 | 12 | 0 | 140 |
-| **P2** | `p1s` | Slot 1 | 10 | 1 | 139 |
-| **P3** | `p2s` | Slot 3 | 12 | 1 | 139 |
-| **P4** | `p3s` | Slot 4 | 11 | 0 | 140 |
+| PID | Chương trình | Thời điểm nạp (`start_time`) | Số lệnh (`size` - toàn bộ `calc`) | Độ ưu tiên (`prio`) | `slot[prio]` ban đầu | Số lần Dispatch thực tế | `slot[prio]` còn lại sau khi chạy xong |
+| :-: | :---: | :-: | :-: | :-: | :-: | :-: | :-: |
+| **P1** | `p2s` | Slot 0 | 12 | 0 | 140 | 3 lần (CPU 1: 1, CPU 0: 2) | $140 - (3 + 5) = \mathbf{132}$ *(dùng chung `slot[0]` với P4)* |
+| **P2** | `p1s` | Slot 1 | 10 | 1 | 139 | 5 lần (CPU 0: 5) | $139 - (5 + 3) = \mathbf{131}$ *(dùng chung `slot[1]` với P3)* |
+| **P3** | `p2s` | Slot 3 | 12 | 1 | 139 | 3 lần (CPU 0: 1, CPU 1: 2) | **131** *(cùng mức `prio = 1`)* |
+| **P4** | `p3s` | Slot 4 | 11 | 0 | 140 | 5 lần (CPU 1: 5) | **132** *(cùng mức `prio = 0`)* |
 
-**Bảng trung gian theo dõi trạng thái lập lịch (`output/sched.output`):**
+**Bảng trung gian theo dõi trạng thái lập lịch và `slot` (`output/sched.output`):**
 
-| Time Slot | Sự kiện Loader (`ld_routine`) | Hoạt động trên **CPU 1** | Hoạt động trên **CPU 0** | Hàng đợi `prio = 0` | Hàng đợi `prio = 1` |
+| Time Slot | Sự kiện Loader (`ld_routine`) | Hoạt động trên **CPU 1** | Hoạt động trên **CPU 0** | Hàng đợi `prio = 0` & `slot[0]` | Hàng đợi `prio = 1` & `slot[1]` |
 | :-: | :--- | :--- | :--- | :---: | :---: |
-| **0** | Load **P1** (`prio=0`) | *(Chưa lấy được proc)* | *(Chưa lấy được proc)* | `[P1]` | `[]` |
-| **1** | Load **P2** (`prio=1`) | **Dispatch P1** (chạy 1/12) | *(Chờ tới slot sau)* | `[]` | `[P2]` |
-| **2** | - | Chạy P1 (2/12) | **Dispatch P2** (chạy 1/10) | `[]` | `[]` |
-| **3** | Load **P3** (`prio=1`) | Chạy P1 (3/12) | Chạy P2 (2/10) | `[]` | `[P3]` |
-| **4** | Load **P4** (`prio=0`) | Chạy P1 (4/12) | Chạy P2 (3/10) | `[P4]` | `[P3]` |
-| **5** | *(Done)* | Put P1 $\rightarrow$ **Dispatch P4** (1/11) | Chạy P2 (4/10) | `[P1]` | `[P3]` |
-| **6..8** | - | Chạy P4 (2..4/11) | Slot 6: Put P2 $\rightarrow$ **Dispatch P1** (5..7/12) | `[]` | `[P3, P2]` |
-| **9** | - | Put P4 $\rightarrow$ **Dispatch P4** (5/11) | Chạy P1 (8/12) | `[]` | `[P3, P2]` |
-| **10..12** | - | Chạy P4 (6..8/11) | Slot 10: Put P1 $\rightarrow$ **Dispatch P1** (9..11/12) | `[]` | `[P3, P2]` |
-| **13** | - | Put P4 $\rightarrow$ **Dispatch P4** (9/11) | Chạy P1 (12/12) | `[]` | `[P3, P2]` |
-| **14..16** | - | Chạy P4 (10..11/11) | Slot 14: **P1 Finished** $\rightarrow$ **Dispatch P3** (1..3/12) | `[]` | `[P2]` |
-| **17** | - | Put P4 $\rightarrow$ **Dispatch P4** *(pc==size)* | Chạy P3 (4/12) | `[]` | `[P2]` |
-| **18..20** | - | Chờ hết time_slice của P4 | Slot 18: Put P3 $\rightarrow$ **Dispatch P2** (5..7/10) | `[]` | `[P3]` |
-| **21** | - | Put P4 $\rightarrow$ **Dispatch P4** | Chạy P2 (8/10) | `[]` | `[P3]` |
-| **22..25** | - | Slot 22: **P4 Finished** $\rightarrow$ **Dispatch P3** (5..8/12) | Slot 22: Put P2 $\rightarrow$ **Dispatch P2** (9..10/10) | `[]` | `[]` |
-| **26..29** | - | Slot 26: Put P3 $\rightarrow$ **Dispatch P3** (9..12/12) | Slot 26: Put P2 $\rightarrow$ **Dispatch P2** | `[]` | `[]` |
-| **30..32** | - | Slot 30: **P3 Finished**, **CPU 1 Stopped** | Slot 30: Put P2 $\rightarrow$ **Dispatch P2** | `[]` | `[]` |
-| **33** | - | *(Stopped)* | **P2 Finished**, **CPU 0 Stopped** | `[]` | `[]` |
+| **0** | Load **P1** (`prio=0`) | *(Chưa lấy được proc)* | *(Chưa lấy được proc)* | `[P1]` (`slot=140`) | `[]` (`slot=139`) |
+| **1** | Load **P2** (`prio=1`) | **Dispatch P1** (chạy 1/12) | *(Chờ tới slot sau)* | `[]` (`slot=139`) | `[P2]` (`slot=139`) |
+| **2** | - | Chạy P1 (2/12) | **Dispatch P2** (chạy 1/10) | `[]` (`slot=139`) | `[]` (`slot=138`) |
+| **3** | Load **P3** (`prio=1`) | Chạy P1 (3/12) | Chạy P2 (2/10) | `[]` (`slot=139`) | `[P3]` (`slot=138`) |
+| **4** | Load **P4** (`prio=0`) | Chạy P1 (4/12) | Chạy P2 (3/10) | `[P4]` (`slot=139`) | `[P3]` (`slot=138`) |
+| **5** | *(Done)* | Put P1 $\rightarrow$ **Dispatch P4** (1/11) | Chạy P2 (4/10) | `[P1]` (`slot=138`) | `[P3]` (`slot=138`) |
+| **6..8** | - | Chạy P4 (2..4/11) | Slot 6: Put P2 $\rightarrow$ **Dispatch P1** (5..7/12) | `[]` (`slot=137`) | `[P3, P2]` (`slot=138`) |
+| **9** | - | Put P4 $\rightarrow$ **Dispatch P4** (5/11) | Chạy P1 (8/12) | `[]` (`slot=136`) | `[P3, P2]` (`slot=138`) |
+| **10..12** | - | Chạy P4 (6..8/11) | Slot 10: Put P1 $\rightarrow$ **Dispatch P1** (9..11/12) | `[]` (`slot=135`) | `[P3, P2]` (`slot=138`) |
+| **13** | - | Put P4 $\rightarrow$ **Dispatch P4** (9/11) | Chạy P1 (12/12) | `[]` (`slot=134`) | `[P3, P2]` (`slot=138`) |
+| **14..16** | - | Chạy P4 (10..11/11) | Slot 14: **P1 Finished** $\rightarrow$ **Dispatch P3** (1..3/12) | `[]` (`slot=134`) | `[P2]` (`slot=137`) |
+| **17** | - | Put P4 $\rightarrow$ **Dispatch P4** *(pc==size)* | Chạy P3 (4/12) | `[]` (`slot=133`) | `[P2]` (`slot=137`) |
+| **18..20** | - | Chờ hết time_slice của P4 | Slot 18: Put P3 $\rightarrow$ **Dispatch P2** (5..7/10) | `[]` (`slot=133`) | `[P3]` (`slot=136`) |
+| **21** | - | Put P4 $\rightarrow$ **Dispatch P4** | Chạy P2 (8/10) | `[]` (`slot=132`) | `[P3]` (`slot=136`) |
+| **22..25** | - | Slot 22: **P4 Finished** $\rightarrow$ **Dispatch P3** (5..8/12) | Slot 22: Put P2 $\rightarrow$ **Dispatch P2** (9..10/10) | `[]` (`slot=132`) | `[]` (`slot=134`) |
+| **26..29** | - | Slot 26: Put P3 $\rightarrow$ **Dispatch P3** (9..12/12) | Slot 26: Put P2 $\rightarrow$ **Dispatch P2** | `[]` (`slot=132`) | `[]` (`slot=132`) |
+| **30..32** | - | Slot 30: **P3 Finished**, **CPU 1 Stopped** | Slot 30: Put P2 $\rightarrow$ **Dispatch P2** | `[]` (`slot=132`) | `[]` (`slot=131`) |
+| **33** | - | *(Stopped)* | **P2 Finished**, **CPU 0 Stopped** | `[]` (`slot=132`) | `[]` (`slot=131`) |
 
 **Biểu đồ Gantt (Kịch bản `sched` - 2 CPU):**
 
@@ -120,10 +142,10 @@ CPU 0:     |     |    P2     |    P1     |    P1     |    P3     |    P2     |  
 ```
 
 **Giải thích thứ tự chạy:**
-- Tại Slot 1 và 2: P1 (`prio=0`) được cấp cho CPU 1, P2 (`prio=1`) được cấp cho CPU 0 vì lúc đó hàng đợi `prio=0` đã trống.
-- Tại Slot 5: P1 hết `time_slice = 4`, trả về hàng đợi `prio=0` sau P4 (vừa vào lúc Slot 4). Do đó CPU 1 lấy P4 ra chạy.
-- Tại Slot 6: P2 hết `time_slice = 4`, trả về hàng đợi `prio=1`. Khi CPU 0 gọi `get_proc()`, vì hàng đợi `prio=0` đang có P1 (ưu tiên cao hơn `prio=1`), CPU 0 lập tức lấy P1 ra chạy thay vì chạy tiếp P3 hay P2.
-- Chỉ khi cả P1 và P4 (thuộc `prio=0`) đã được lấy hết hoặc hoàn thành (từ Slot 14 trở đi), CPU 0 và CPU 1 mới quay xuống phục vụ P3 và P2 ở hàng đợi `prio=1`.
+- Tại Slot 1 và 2: P1 (`prio=0`) được cấp cho CPU 1 (`slot[0]` giảm từ 140 xuống 139), P2 (`prio=1`) được cấp cho CPU 0 (`slot[1]` giảm từ 139 xuống 138) vì lúc đó hàng đợi `prio=0` đã trống.
+- Tại Slot 5: P1 hết `time_slice = 4`, trả về hàng đợi `prio=0` sau P4 (vừa vào lúc Slot 4). Do đó CPU 1 lấy P4 ra chạy (`slot[0]` giảm còn 138).
+- Tại Slot 6: P2 hết `time_slice = 4`, trả về hàng đợi `prio=1`. Khi CPU 0 gọi `get_proc()`, vì hàng đợi `prio=0` đang có P1 (ưu tiên cao hơn `prio=1` và `slot[0] = 138 > 0`), CPU 0 lập tức lấy P1 ra chạy thay vì chạy tiếp P3 hay P2.
+- Chỉ khi cả P1 và P4 (thuộc `prio=0`) đã được lấy hết hoặc hoàn thành (từ Slot 14 trên CPU 0 và Slot 22 trên CPU 1), CPU 0 và CPU 1 mới quay xuống phục vụ P3 và P2 ở hàng đợi `prio=1`.
 
 ---
 
@@ -131,7 +153,27 @@ CPU 0:     |     |    P2     |    P1     |    P1     |    P3     |    P2     |  
 
 **Cấu hình đầu vào (`input/sched_0`):**
 - `time_slice = 2`, `num_cpus = 1`, `num_processes = 4`
-- P1 (`s0`, 15 lệnh, nạp Slot 0, `prio=4`), P2 (`s0`, 15 lệnh, nạp Slot 1, `prio=4`), P3 (`s1`, 7 lệnh, nạp Slot 4, `prio=0`), P4 (`s0`, 15 lệnh, nạp Slot 5, `prio=0`).
+- Danh sách tiến trình và thống kê `slot` theo `priority`:
+
+| PID | Chương trình | Thời điểm nạp (`start_time`) | Số lệnh (`size`) | Độ ưu tiên (`prio`) | `slot[prio]` ban đầu | Số lần Dispatch | `slot[prio]` còn lại khi kết thúc |
+| :-: | :---: | :-: | :-: | :-: | :-: | :-: | :-: |
+| **P1** | `s0` | Slot 0 | 15 | 4 | 136 | 8 lần | $136 - (8 + 8) = \mathbf{120}$ *(dùng chung `slot[4]` với P2)* |
+| **P2** | `s0` | Slot 1 | 15 | 4 | 136 | 8 lần | **120** *(cùng mức `prio = 4`)* |
+| **P3** | `s1` | Slot 4 | 7 | 0 | 140 | 4 lần | $140 - (4 + 8) = \mathbf{128}$ *(dùng chung `slot[0]` với P4)* |
+| **P4** | `s0` | Slot 5 | 15 | 0 | 140 | 8 lần | **128** *(cùng mức `prio = 0`)* |
+
+**Bảng trung gian theo dõi trạng thái lập lịch và `slot` (`output/sched_0.output`):**
+
+| Giai đoạn (Time Slot) | Sự kiện Loader / Hoàn thành | Tiến trình được Dispatch trên **CPU 0** | Hàng đợi `prio = 0` & `slot[0]` | Hàng đợi `prio = 4` & `slot[4]` |
+| :---: | :--- | :--- | :---: | :---: |
+| **0** | Load **P1** (`prio=4`) | *(Chờ)* | `[]` (`140`) | `[P1]` (`136`) |
+| **1..2** | Slot 1: Load **P2** (`prio=4`) | **Dispatch P1** (chạy 2 lệnh) | `[]` (`140`) | `[P2]` (`135`) |
+| **3..4** | Slot 4: Load **P3** (`prio=0`) | Put P1 $\rightarrow$ **Dispatch P2** (chạy 2 lệnh) | `[P3]` (`140`) | `[P1]` (`134`) |
+| **5..6** | Slot 5: Load **P4** (`prio=0`) | Put P2 $\rightarrow$ **Dispatch P3** (ưu tiên `prio=0`) | `[P4]` (`139`) | `[P1, P2]` (`134`) |
+| **7..21** | - | Luân phiên Round-Robin **P4 $\leftrightarrow$ P3** (`time_slice=2`):<br>P4 (7..8), P3 (9..10), P4 (11..12), P3 (13..14), P4 (15..16), P3 (17..18), P4 (19..20), P3 (21) | Cuối Slot 21:<br>`[P4]` (`132`) | `[P1, P2]` (`134`) |
+| **22..28** | Slot 22: **P3 Finished** | **P4** chạy liên tục 4 lượt cuối: (22..23), (24..25), (26..27), (28) | `[]` (`128`) | `[P1, P2]` (`134`) |
+| **29..53** | Slot 29: **P4 Finished** | Hàng đợi `prio=0` rỗng $\rightarrow$ Luân phiên **P1 $\leftrightarrow$ P2** ở `prio=4`:<br>P1 (29..30), P2 (31..32), ..., P2 (51..52), P1 (53) | `[]` (`128`) | Cuối Slot 53:<br>`[P2]` (`121`) |
+| **54..55** | Slot 54: **P1 Finished**<br>Slot 55: **P2 Finished** | Slot 54: **Dispatch P2** (chạy lệnh cuối) $\rightarrow$ Slot 55: **CPU 0 Stopped** | `[]` (`128`) | `[]` (`120`) |
 
 **Biểu đồ Gantt (Kịch bản `sched_0` - 1 CPU):**
 
@@ -143,8 +185,8 @@ CPU 0: |  |P1|P2|P3|P4|P3|P4|P3|P4|P3|P4|P3|P4|P4|P4|P4|P1|P2|P1|P2|P1|P2|P1|P2|
 ```
 
 **Giải thích:**
-- Từ Slot 1 đến Slot 5: Chỉ có P1 và P2 (`prio=4`), CPU 0 chạy lần lượt P1 (Slot 1-2) và P2 (Slot 3-4).
-- Tại Slot 4 và 5: P3 và P4 xuất hiện với độ ưu tiên cao nhất (`prio=0`). Do đó từ Slot 5 đến Slot 29, P3 và P4 chiếm quyền ưu tiên trên CPU 0, luân phiên nhau theo Round-Robin (`time_slice = 2`) cho đến khi P3 kết thúc ở Slot 22 và P4 kết thúc ở Slot 29.
+- Từ Slot 1 đến Slot 5: Chỉ có P1 và P2 (`prio=4`), CPU 0 chạy lần lượt P1 (Slot 1-2) và P2 (Slot 3-4), tiêu thụ 2 slot của mức `prio=4` (`slot[4]` giảm từ 136 xuống 134).
+- Tại Slot 4 và 5: P3 và P4 xuất hiện với độ ưu tiên cao nhất (`prio=0`). Do đó từ Slot 5 đến Slot 29, P3 và P4 chiếm quyền ưu tiên trên CPU 0, luân phiên nhau theo Round-Robin (`time_slice = 2`) cho đến khi P3 kết thúc ở Slot 22 và P4 kết thúc ở Slot 29 (tiêu thụ 12 slot của mức `prio=0`, `slot[0]` còn 128).
 - Từ Slot 29 đến Slot 55: Hàng đợi `prio=0` đã trống hoàn toàn, P1 và P2 ở `prio=4` mới tiếp tục luân phiên nhau chạy cho đến khi kết thúc ở Slot 54 (P1) và Slot 55 (P2).
 
 ---
@@ -153,20 +195,42 @@ CPU 0: |  |P1|P2|P3|P4|P3|P4|P3|P4|P3|P4|P3|P4|P4|P4|P4|P1|P2|P1|P2|P1|P2|P1|P2|
 
 **Cấu hình đầu vào (`input/sched_1`):**
 - `time_slice = 2`, `num_cpus = 1`, `num_processes = 5`
-- P1 (`s0`, 15 lệnh, Slot 0, `prio=4`), P2 (`s3`, 11 lệnh, Slot 2, `prio=0`), P3 (`s2`, 12 lệnh, Slot 3, `prio=0`), P4 (`s1`, 7 lệnh, Slot 5, `prio=0`), P5 (`s3`, 11 lệnh, Slot 6, `prio=0`).
+- Danh sách tiến trình và thống kê `slot` theo `priority`:
+
+| PID | Chương trình | Thời điểm nạp (`start_time`) | Số lệnh (`size`) | Độ ưu tiên (`prio`) | `slot[prio]` ban đầu | Số lần Dispatch | `slot[prio]` còn lại khi kết thúc |
+| :-: | :---: | :-: | :-: | :-: | :-: | :-: | :-: |
+| **P1** | `s0` | Slot 0 | 15 | 4 | 136 | 8 lần | $136 - 8 = \mathbf{128}$ |
+| **P2** | `s3` | Slot 2 | 11 | 0 | 140 | 6 lần | $140 - (6+6+4+6) = \mathbf{118}$ *(chung `slot[0]`)* |
+| **P3** | `s2` | Slot 3 | 12 | 0 | 140 | 6 lần | **118** *(cùng mức `prio = 0`)* |
+| **P4** | `s1` | Slot 5 | 7 | 0 | 140 | 4 lần | **118** *(cùng mức `prio = 0`)* |
+| **P5** | `s3` | Slot 6 | 11 | 0 | 140 | 6 lần | **118** *(cùng mức `prio = 0`)* |
+
+**Bảng trung gian theo dõi trạng thái lập lịch và `slot` (`output/sched_1.output`):**
+
+| Giai đoạn (Time Slot) | Sự kiện Loader / Hoàn thành | Tiến trình được Dispatch trên **CPU 0** | Hàng đợi `prio = 0` & `slot[0]` | Hàng đợi `prio = 4` & `slot[4]` |
+| :---: | :--- | :--- | :---: | :---: |
+| **0** | Load **P1** (`prio=4`) | *(Chờ)* | `[]` (`140`) | `[P1]` (`136`) |
+| **1..2** | Slot 2: Load **P2** (`prio=0`) | **Dispatch P1** (chạy 2/15) | `[P2]` (`140`) | `[]` (`135`) |
+| **3..4** | Slot 3: Load **P3** (`prio=0`) | Put P1 $\rightarrow$ **Dispatch P2** (chạy 2/11) | `[P3]` (`139`) | `[P1]` (`135`) |
+| **5..6** | Slot 5: Load **P4** (`prio=0`)<br>Slot 6: Load **P5** (`prio=0`) | Put P2 $\rightarrow$ **Dispatch P3** (chạy 2/12) | `[P2, P4, P5]` (`138`) | `[P1]` (`135`) |
+| **7..41** | - | Xoay vòng 4 tiến trình `prio=0` theo thứ tự **`P2 -> P4 -> P5 -> P3`** (mỗi lượt 2 slot) trong 4 vòng liên tiếp, rồi P2 (39..40), P4 (41) | Cuối Slot 41:<br>`[P5, P3, P2]` (`124`) | `[P1]` (`135`) |
+| **42..45** | Slot 42: **P4 Finished** | Xoay vòng 3 tiến trình còn lại: **P5** (42..43) $\rightarrow$ **P3** (44..45) | `[P2, P5]` (`122`) | `[P1]` (`135`) |
+| **46..51** | Slot 46: **P3 Finished** | Xoay vòng 2 tiến trình còn lại: **P2** (46..47) $\rightarrow$ **P5** (48..49) $\rightarrow$ **P2** (50..51) | `[P5]` (`119`) | `[P1]` (`135`) |
+| **52..55** | Slot 52: **P2 Finished** | **P5** chạy 2 lượt cuối: (52..53), (54..55) | `[]` (`118`) | `[P1]` (`135`) |
+| **56..69** | Slot 56: **P5 Finished**<br>Slot 69: **P1 Finished** | Hàng đợi `prio=0` rỗng $\rightarrow$ **P1** (`prio=4`) chạy 7 lượt liên tiếp từ Slot 56 đến Slot 69 $\rightarrow$ **CPU 0 Stopped** | `[]` (`118`) | `[]` (`128`) |
 
 **Biểu đồ Gantt (Kịch bản `sched_1` - 1 CPU):**
 
 ```text
-Slot:   0  1  3  5  7  9 11 13 15 17 19 21 23 25 27 29 31 33 35 37 39 41 42 44 46 48 50 52 54 56 .. 69
-       +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+-----+--+
-CPU 0: |  |P1|P2|P3|P2|P4|P5|P3|P2|P4|P5|P3|P2|P4|P5|P3|P2|P4|P5|P3|P2|P4|P5|P3|P2|P5|P2|P5|P5| P1  |Stop
-       +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+-----+--+
+Slot:   0  1  3  5  7  9 11 13 15 17 19 21 23 25 27 29 31 33 35 37 39 41 42 44 46 48 50 52 54 56 58 60 62 64 66 68 69
+       +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+CPU 0: |  |P1|P2|P3|P2|P4|P5|P3|P2|P4|P5|P3|P2|P4|P5|P3|P2|P4|P5|P3|P2|P4|P5|P3|P2|P5|P2|P5|P5|P1|P1|P1|P1|P1|P1|P1|Stop
+       +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 ```
 
 **Giải thích:**
-- P1 (`prio=4`) chạy được 1 lượt (Slot 1-2). Ngay sau đó P2, P3, P4, P5 (`prio=0`) lần lượt vào hàng đợi ưu tiên 0 và xoay vòng Round-Robin `(P2 -> P4 -> P5 -> P3)` cho tới khi hoàn tất hết ở Slot 56 (P4 xong ở 42, P3 xong ở 46, P2 xong ở 52, P5 xong ở 56).
-- Từ Slot 56 đến 69: P1 (`prio=4`) được lấy ra chạy nốt các lệnh còn lại cho đến khi dừng ở Slot 69.
+- P1 (`prio=4`) chạy được 1 lượt đầu tiên (Slot 1-2, `slot[4]` giảm từ 136 xuống 135). Ngay sau đó P2, P3, P4, P5 (`prio=0`) lần lượt vào hàng đợi ưu tiên 0 và xoay vòng Round-Robin `(P2 -> P4 -> P5 -> P3)` cho tới khi hoàn tất hết ở Slot 56 (P4 xong ở 42, P3 xong ở 46, P2 xong ở 52, P5 xong ở 56; tổng cộng dùng 22 lượt `slot[0]`, còn lại 118).
+- Từ Slot 56 đến 69: Hàng đợi `prio=0` đã trống, P1 (`prio=4`) được lấy ra chạy nốt 7 lượt còn lại (`slot[4]` giảm từ 135 xuống 128) cho đến khi dừng ở Slot 69.
 
 ---
 
