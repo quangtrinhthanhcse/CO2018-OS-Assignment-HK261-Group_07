@@ -216,13 +216,108 @@ Trong bộ lập lịch Hàng đợi Đa mức (Multi-Level Queue - MLQ) của h
 *(Phụ trách: Trịnh Thanh Quang - MSSV: 2412862)*
 
 ### 3.1. Sơ đồ Dịch địa chỉ Phân trang 5 cấp (57-bit Virtual Address)
-*(Phần nội dung chi tiết sẽ do thành viên phụ trách B3 cập nhật)*
+
+#### a) Cấu trúc địa chỉ ảo 57-bit và Định dạng PTE
+Hệ thống ở chế độ 64-bit (`#define MM64 1` trong `include/os-cfg.h`, cấu hình trong `include/mm64.h`) sử dụng kích thước trang **`PAGING64_PAGESZ = 4096` byte (4 KB)** và không gian địa chỉ hiệu dụng **57 bit**, chia thành 5 cấp thư mục trang (mỗi cấp 9 bit $\rightarrow$ $2^9 = 512$ phần tử/bảng) và 12 bit độ lệch trong trang (`OFFSET`):
+
+| Trường bit | Không dùng | PGD (Cấp 5) | P4D (Cấp 4) | PUD (Cấp 3) | PMD (Cấp 2) | PT (Cấp 1) | OFFSET |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Vị trí bit** | `63..57` | `56..48` | `47..39` | `38..30` | `29..21` | `20..12` | `11..0` |
+| **Số bit** | 7 bit | 9 bit | 9 bit | 9 bit | 9 bit | 9 bit | 12 bit |
+| **Vùng nhớ quản lý** | --- | 128 PiB | 256 TB | 512 GB | 1 GB | 2 MB | 4 KB |
+
+**Sơ đồ luồng dịch địa chỉ từ địa chỉ ảo sang địa chỉ vật lý trên RAM:**
+
+```text
+  Địa chỉ ảo 57-bit (va)
+  +---------+---------+---------+---------+---------+-------------+
+  | PGD (9) | P4D (9) | PUD (9) | PMD (9) | PT (9)  | OFFSET (12) |
+  +----+----+----+----+----+----+----+----+----+----+------+------+
+       |         |         |         |         |           |
+       v         v         v         v         v           |
+  get_pd_from_address() / get_pd_from_pagenum()            |
+       |                                                   |
+       v                                                   |
+  mm->pgd[pgd] -> mm->p4d[p4d] -> mm->pud[pud] -> mm->pmd[pmd] -> mm->pt[pt] = PTE
+                                                                     |
+             +-------------------------------------------------------+
+             | Kiểm tra cờ trong PTE (Hình 6 - include/mm.h)
+             v
+     [Bit 31: PRESENT == 1 ?]
+       |-- Có  --> Lấy FPN (Bit 0..12) --> phyaddr = FPN * 4096 + OFFSET --> Truy cập mram->storage[phyaddr]
+       '-- Không (Bit 30: SWAPPED == 1) --> Đọc SWPTYP (0..4) & SWPOFF (5..25) --> Swap in vào RAM trước
+```
+
+#### b) Tóm tắt hiện thực tầng Bộ nhớ Vật lý & Phân trang (`src/mm-memphy.c`, `src/mm64.c`)
+- **Quản lý RAM/SWAP vật lý (`src/mm-memphy.c`):**
+  - `MEMPHY_get_freefp()`: Lấy khung trang vật lý trống ở đầu `mp->free_fp_list`, cập nhật lại danh sách và trả về `0` (hoặc `-1` nếu hết khung trống).
+  - `MEMPHY_dump()`: Duyệt và in nội dung bộ nhớ vật lý `mp->storage` theo từng byte để kiểm tra/gỡ lỗi.
+- **Khởi tạo và thao tác bảng trang 5 cấp (`src/mm64.c`):**
+  - `init_mm()`: Cấp phát 5 mảng bảng trang (`pgd`, `p4d`, `pud`, `pmd`, `pt`), mỗi bảng `PAGING64_MAX_PGN = 512` phần tử `addr_t` ($512 \times 8 = 4096$ byte) qua `calloc()`, đồng thời khởi tạo `VMA0` (`vm_start = vm_end = sbrk = 0`), đưa vùng khởi tạo vào `vm_freerg_list` và làm rỗng `symrgtbl`, `fifo_pgn`.
+  - `pte_get_entry()`, `pte_set_entry()`, `pte_set_fpn()`, `pte_set_swap()`: Truy xuất trực tiếp vào `caller->mm->pt[pt]` theo chỉ số tách bởi `get_pd_from_pagenum()`. Khi ánh xạ RAM (`pte_set_fpn()`), bật cờ `PAGING_PTE_PRESENT_MASK`, xóa cờ `SWAPPED` và ghi `fpn`. Khi đẩy trang ra SWAP (`pte_set_swap()`), xóa cờ `PRESENT`, bật cờ `SWAPPED` và ghi `swptyp` (bit `0..4`) cùng `swpoff` (bit `5..25`).
+  - `alloc_pages_range()` & `vmap_page_range()` (được `vm_map_ram()` gọi): Cấp phát đủ `req_pgnum` khung trang từ `caller->krnl->mram` (có cơ chế **rollback** trả lại toàn bộ khung trang đã lấy qua `MEMPHY_put_freefp()` và trả `-3000` nếu thiếu RAM giữa chừng), ánh xạ từng trang ảo sang `fpn`, cập nhật `ret_rg` theo `PAGING64_PAGESZ` (`4096`), và ghi nhận trang vào `caller->mm->fifo_pgn` qua `enlist_pgn_node()` để phục vụ thay trang FIFO.
+  - `vmap_pgd_memset()` & `print_pgtbl()`: Hỗ trợ đặt giá trị mẫu `0xdeadbeef` vào PTE và in địa chỉ các cấp bảng trang đúng định dạng mẫu ` PDG=... P4g=... PUD=... PMD=...`.
+
+---
 
 ### 3.2. Thống kê Truy cập Bộ nhớ và Dung lượng Bảng trang
-*(Phần nội dung chi tiết sẽ do thành viên phụ trách B3 cập nhật)*
+
+#### a) Thống kê số lần truy cập bộ nhớ (Memory Accesses)
+Mỗi phần tử bảng trang nằm trên RAM, do đó khi CPU truy cập 1 byte dữ liệu qua địa chỉ ảo (trong trường hợp **không có TLB** hoặc **TLB miss**), số lần truy cập bộ nhớ phụ thuộc trực tiếp vào số cấp bảng trang:
+
+| Cơ chế quản lý bộ nhớ | Số lần tra bảng trang | Số lần đọc/ghi dữ liệu | Tổng số lần truy cập bộ nhớ | Ghi chú |
+| :--- | :---: | :---: | :---: | :--- |
+| **Không phân trang (địa chỉ vật lý trực tiếp)** | 0 | 1 | **1 lần** | Không có lớp bảo vệ/cô lập không gian ảo |
+| **Bảng trang 1 cấp (Single-level Paging)** | 1 | 1 | **2 lần** | Tốn 1 lần đọc PTE + 1 lần truy cập dữ liệu |
+| **Phân trang 5 cấp (5-level Paging, không TLB)** | 5 | 1 | **6 lần** | Đọc lần lượt `PGD` $\rightarrow$ `P4D` $\rightarrow$ `PUD` $\rightarrow$ `PMD` $\rightarrow$ `PT`, rồi truy cập dữ liệu |
+| **Phân trang 5 cấp + TLB Hit (Thực tế phần cứng)** | 0 | 1 | **1 lần** | Nhờ bộ nhớ đệm TLB lưu sẵn `VPN -> FPN` |
+
+- **Nhận xét:** Phân trang 5 cấp làm chi phí tra cứu tối đa tăng từ `2` lên `6` lần truy cập bộ nhớ khi trượt TLB (gấp 3 lần so với 1 cấp). Tuy nhiên đây là sự đánh đổi cần thiết để thu gọn kích thước bảng trang trên kiến trúc 64-bit; trên phần cứng thực tế, hiện tượng cục bộ tham chiếu kết hợp TLB giúp phần lớn truy cập không phải duyệt lại đủ 5 cấp.
+
+#### b) Thống kê dung lượng lưu trữ bảng trang & So sánh với bảng trang 1 cấp
+Xét không gian địa chỉ ảo **57 bit** (`PAGING64_CPU_BUS_WIDTH = 57`), kích thước trang **4 KB** (`PAGING64_PAGESZ = 4096`, bằng $2^{12}$ byte) và kích thước mỗi mục bảng trang **8 byte** (`sizeof(addr_t)` = `uint64_t`):
+
+1. **Bảng trang 1 cấp (Single-level Page Table):**
+   - Số lượng trang ảo tối đa trên mỗi tiến trình: $2^{57 - 12} = 2^{45}$ trang.
+   - Tổng dung lượng bảng trang bắt buộc cấp phát cho **1 tiến trình**:
+     $$2^{45} \times 8\text{ bytes} = 2^{48}\text{ bytes} = \mathbf{256\text{ TiB}}$$
+   - Không chỉ dung lượng khổng lồ vượt xa RAM vật lý, bảng 1 cấp còn đòi hỏi cấp phát liên tục cho toàn bộ $2^{45}$ mục dù tiến trình chỉ sử dụng vài trang nhớ.
+
+2. **Phân trang 5 cấp (Multi-level Paging) — Lý thuyết phân cấp (Demand Allocation):**
+   - Mỗi bảng con chỉ gồm $512$ phần tử $\times$ $8$ byte $= 4096$ byte ($= \mathbf{4\text{ KB}}$, vừa khít 1 trang vật lý).
+   - Khi tiến trình mới chạy và chỉ sử dụng vùng nhớ nhỏ (ví dụ vài trang đầu tiên của Data Segment nằm gọn trong 1 nhánh từ PGD xuống PT), hệ thống chỉ cần cấp phát 1 bảng ở mỗi cấp dọc đường dẫn:
+     $$5\text{ bảng} \times 4\text{ KB} = \mathbf{20\text{ KB / tiến trình}}$$
+   - So với $256\text{ TiB}$ của bảng 1 cấp, dung lượng tối thiểu giảm hơn **$1.37 \times 10^{10}$ lần**, đồng thời các bảng con không cần nằm liên tục cạnh nhau trên RAM.
+
+3. **Dung lượng thực tế trong mô phỏng `demacOprx` (`init_mm()` trong `src/mm64.c`):**
+   - Để giữ cấu trúc mô phỏng đơn giản và bám sát khung bài tập (`PAGING64_MAX_PGN = 512` trang tối đa = `2 MB` không gian kiểm thử), hàm `init_mm()` cấp phát sẵn 5 mảng bảng trang (`pgd`, `p4d`, `pud`, `pmd`, `pt`), mỗi mảng 512 phần tử $\times$ 8 byte:
+     $$\text{Dung lượng bảng trang / tiến trình} = 5 \times (512 \times 8\text{ bytes}) = 5 \times 4096\text{ bytes} = \mathbf{20\,480\text{ bytes} = 20\text{ KB}}$$
+   - Tổng bộ nhớ quản lý bảng trang của mô phỏng chỉ tăng tuyến tính $20\text{ KB} \times M$ theo số lượng tiến trình $M$ trong kịch bản (ví dụ 5 tiến trình trong `input/os_0_mlq_paging` chỉ tốn $5 \times 20\text{ KB} = 100\text{ KB}$ cộng thêm bảng trang nhân), giữ mức tiêu thụ RAM rất nhỏ.
+
+---
 
 ### 3.3. Trả lời Câu hỏi 4, 5, 6
-*(Phần nội dung chi tiết sẽ do thành viên phụ trách B3 cập nhật)*
+
+#### Câu hỏi 4 (Trang 17): *Động lực chính của việc kết hợp phân đoạn (segmentation) với phân trang (paging) là gì? Cách tiếp cận lai (hybrid) này giải quyết hạn chế khi dùng riêng lẻ từng kỹ thuật như thế nào?*
+- **Hạn chế khi dùng riêng lẻ:**
+  - **Chỉ Phân đoạn:** Chia bộ nhớ thành các phân đoạn có ý nghĩa logic (Code, Data, Heap, Stack) nên dễ bảo vệ quyền truy cập và chia sẻ vùng nhớ, nhưng mỗi phân đoạn đòi hỏi một khối RAM vật lý **liên tục** với kích thước thay đổi $\rightarrow$ gây **phân mảnh ngoại vi (external fragmentation)** nghiêm trọng và khó mở rộng vùng nhớ.
+  - **Chỉ Phân trang:** Chia bộ nhớ thành các trang/khung có kích thước cố định (`4 KB`), triệt tiêu hoàn toàn phân mảnh ngoại vi, nhưng không còn phản ánh ranh giới logic tự nhiên của chương trình nên khó phân quyền theo từng vùng chức năng.
+- **Giải pháp kết hợp trong mô hình lai (Hybrid):**
+  - Như cách hiện thực trong `demacOprx`: tầng trên dùng **phân đoạn (`struct vm_area_struct` với `[vm_start, vm_end]`, `sbrk`)** để quản lý các khu vực logic liên tục trên không gian ảo và kiểm soát ranh giới cấp phát; tầng dưới dùng **phân trang 5 cấp (`mm64.c`)** chia từng phân đoạn thành các trang `4 KB` ánh xạ xuống các khung RAM (`mram`) nằm rải rác. Nhờ đó hệ thống vừa giữ được cấu trúc vùng nhớ logic rõ ràng, vừa loại bỏ được phân mảnh ngoại vi khi cấp phát vật lý.
+
+#### Câu hỏi 5 (Trang 18): *Lợi ích của việc mở rộng phân trang phân cấp (hierarchical paging) lên $N$ cấp là gì?*
+1. **Tránh cấp phát bảng trang liên tục khổng lồ:** Trên kiến trúc 57-bit/64-bit, một bảng trang phẳng 1 cần tới `256 TiB` bộ nhớ liên tục cho mỗi tiến trình. Chia thành $N$ cấp (5 cấp trong `mm64.c`) giúp chia nhỏ bảng trang thành từng khối đúng bằng kích thước 1 trang (`4096` byte = `512` entry $\times$ `8` byte), có thể cấp phát phân tán trên RAM như mọi trang dữ liệu bình thường.
+2. **Hỗ trợ cấp phát thưa:** Tiến trình thực tế chỉ sử dụng một phần rất nhỏ không gian địa chỉ 64-bit (chủ yếu ở vùng đầu Data/Heap và vùng cuối Stack). Với cấu trúc cây $N$ cấp, các nhánh thư mục không dùng tới không cần cấp phát bảng con cấp dưới, giúp tiết kiệm bộ nhớ từ hàng trăm TB xuống chỉ còn vài chục KB cho mỗi tiến trình.
+
+#### Câu hỏi 6 (Trang 19): *Ưu điểm và nhược điểm của cơ chế phân trang (paging) so với cấp phát bộ nhớ liên tục (contiguous memory allocation) là gì?*
+
+| Tiêu chí | Cấp phát bộ nhớ liên tục (Contiguous memory ) | Cơ chế Phân trang (Paging) |
+| :--- | :--- | :--- |
+| **Phân mảnh bộ nhớ** | Gây **phân mảnh ngoại vi** nặng (tổng RAM trống đủ nhưng không liền kề nhau để cấp). | **Loại bỏ hoàn toàn phân mảnh ngoại vi**; chỉ có thể dư một phần nhỏ **phân mảnh nội vi** ở trang cuối cùng (trung bình nửa trang). |
+| **Tính linh hoạt & Swap** | Khó mở rộng vùng nhớ khi đụng vùng kề bên; nếu swap phải chuyển cả khối lớn. | Mở rộng linh hoạt bằng cách xin thêm từng khung `4 KB` rời rạc (`alloc_pages_range()`); dễ swap từng trang lẻ ra `MEMSWP` (`pte_set_swap()`). |
+| **Chi phí tra cứu & Lưu trữ** | Dịch địa chỉ rất nhanh (chỉ cần thanh ghi `base + limit`), không tốn RAM lưu bảng trang. | Tốn RAM lưu cấu trúc bảng trang (`pgd..pt`) và tốn thêm chu kỳ truy cập bộ nhớ khi tra bảng đa cấp (nếu trượt TLB). |
+
+*(Ghi chú: Ví dụ dịch địa chỉ 5 cấp trích từ log chạy thực tế của nhóm cho mục `B3-3` sẽ được bổ sung tiếp sau khi tích hợp xong tầng `A2` và chạy các kịch bản `os_0_mlq_paging`, `os_1_singleCPU_mlq_paging`).*
 
 ---
 
