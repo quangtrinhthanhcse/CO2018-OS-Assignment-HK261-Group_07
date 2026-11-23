@@ -37,7 +37,7 @@ Hệ thống mô phỏng đa CPU (`num_cpus` luồng `cpu_routine`), 1 luồng `
 
 Khi chạy kiểm tra tích hợp toàn bộ 14 bài test trên nhánh `main` (commit `fb811e6`), các lỗi hiện tại được phân loại theo mức độ nghiêm trọng và giao cụ thể cho từng thành viên phụ trách dưới đây:
 
-### 🔴 Nhóm 1: Lỗi Biên Dịch (Compile/Link Blocker - Chặn `make all`)
+### Nhóm 1: Lỗi Biên Dịch (Compile/Link Blocker - Chặn `make all`)
 
 | Mã lỗi | File & Dòng | Mô tả lỗi chi tiết | Giải pháp khắc phục | Người nhận (Owner) |
 | :-: | :--- | :--- | :--- | :--- |
@@ -45,7 +45,7 @@ Khi chạy kiểm tra tích hợp toàn bộ 14 bài test trên nhánh `main` (c
 
 ---
 
-### 🟠 Nhóm 2: Lỗi Chức Năng Chưa Hoàn Thiện (Chặn các test Paging, Syscall & Swap)
+### Nhóm 2: Lỗi Chức Năng Chưa Hoàn Thiện (Chặn các test Paging, Syscall & Swap)
 
 | Mã lỗi | File & Dòng | Mô tả lỗi & Bài test bị ảnh hưởng | Giải pháp khắc phục | Người nhận (Owner) |
 | :-: | :--- | :--- | :--- | :--- |
@@ -59,7 +59,7 @@ Khi chạy kiểm tra tích hợp toàn bộ 14 bài test trên nhánh `main` (c
 
 ---
 
-### 🟡 Nhóm 3: Lỗi Khớp Định Dạng Output Mẫu (`diff` với `output/*.output`)
+### Nhóm 3: Lỗi Khớp Định Dạng Output Mẫu (`diff` với `output/*.output`)
 
 | Mã lỗi | File & Dòng | Mô tả lệch output so với `output/` | Giải pháp khắc phục | Người nhận (Owner) |
 | :-: | :--- | :--- | :--- | :--- |
