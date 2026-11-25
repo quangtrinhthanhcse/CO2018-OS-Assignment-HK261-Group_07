@@ -672,26 +672,39 @@ int libmem_dma_memcpy(struct pcb_t *caller, uint32_t src, uint32_t dst, uint32_t
 #endif
   uint32_t rgid[2] = { src, dst };
   struct vm_rg_struct *rg[2] = { NULL, NULL };
+  int kernel[2] = { 0, 0 };
   addr_t va, pa[2], done, len, rgsz;
-  int i, pass, fpn;
+  int i, pass, fpn, bad, ret = -1;
+
+  /* Same order as __kmalloc: kernel regions and krnl_pgd, then the process memory */
+  pthread_mutex_lock(&kmm_lock);
+  pthread_mutex_lock(&mmvm_lock);
 
   for (i = 0; i < 2; i++)
   {
-    /* shortcut: user regions only, so a kmalloc region is refused;
-     * look up the kernel region table here once kmalloc keeps one */
+    /* A region id names a user region (alloc) or, failing that, a kmalloc region of the caller */
     if (rgid[i] < PAGING_MAX_SYMTBL_SZ)
+    {
       rg[i] = &caller->mm->symrgtbl[rgid[i]];
+      if (rg[i]->rg_end <= rg[i]->rg_start)
+      {
+        struct kmem_rg *krg = kmem_find_rg(caller->pid, (int)rgid[i]);
+
+        rg[i] = krg ? &krg->rg : NULL;
+        kernel[i] = 1;
+      }
+    }
     if (rg[i] == NULL || rg[i]->rg_end <= rg[i]->rg_start)
     {
-      printf("dma_memcpy: region %u is not an allocated user region\n", rgid[i]);
-      return -1;
+      printf("dma_memcpy: region %u is not allocated\n", rgid[i]);
+      goto out;
     }
     rgsz = rg[i]->rg_end - rg[i]->rg_start;
     if (offset > rgsz || size > rgsz - offset)
     {
       printf("dma_memcpy: offset %u + size %u is past the end of region %u\n",
              offset, size, rgid[i]);
-      return -1;
+      goto out;
     }
   }
 
@@ -703,29 +716,41 @@ int libmem_dma_memcpy(struct pcb_t *caller, uint32_t src, uint32_t dst, uint32_t
       for (i = 0; i < 2; i++)
       {
         va = rg[i]->rg_start + offset + done;
-        /* The chip cannot take a page fault: bring the page into RAM before translating */
-        if (pg_getpage(caller->mm, va / pagesz, &fpn, caller) != 0 ||
-            !PAGING_PAGE_PRESENT(pte_get_entry(caller->mm, va / pagesz, caller)))
+        if (kernel[i])
+          bad = kmem_va2pa(caller->krnl, va, &pa[i]) != 0;   /* kernel page table (krnl_pgd) */
+        else
+        {
+          /* The chip cannot take a page fault: bring the page into RAM before translating */
+          bad = pg_getpage(caller->mm, va / pagesz, &fpn, caller) != 0 ||
+                !PAGING_PAGE_PRESENT(pte_get_entry(caller->mm, va / pagesz, caller));
+          if (!bad)
+            pa[i] = (addr_t)fpn * pagesz + va % pagesz;
+        }
+        if (bad)
         {
           printf("dma_memcpy: page not in RAM: region %u, offset %lu\n",
                  rgid[i], (unsigned long)(offset + done));
-          return -1;
+          goto out;
         }
-        pa[i] = (addr_t)fpn * pagesz + va % pagesz;
         /* One transfer stays inside one page of each region */
         if (len > pagesz - va % pagesz)
           len = pagesz - va % pagesz;
       }
       /*
        * shortcut: the process keeps running and its frames are not pinned, so nothing may
-       * write these bytes, or swap out or free their pages, before "DMA completed";
-       * park the process in cpu_routine and skip DMA pages in find_victim_page when needed
+       * read or write these bytes (user or kmalloc), or swap out or free their pages, before
+       * "DMA completed"; the chip copies outside kmm_lock/mmvm_lock. Park the process in
+       * cpu_routine and skip DMA pages in find_victim_page when that matters.
        */
       if (pass == 1 && dma_submit(caller, pa[0], pa[1], len, done + len == size) != 0)
-        return -1;
+        goto out;
     }
+  ret = 0;
 
-  return 0;
+out:
+  pthread_mutex_unlock(&mmvm_lock);
+  pthread_mutex_unlock(&kmm_lock);
+  return ret;
 }
 
 /* kmem_rg_len - size in bytes of kernel region (pid,rgid), -1 if none */
