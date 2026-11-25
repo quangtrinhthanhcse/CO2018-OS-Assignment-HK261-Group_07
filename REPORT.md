@@ -16,7 +16,7 @@
 | 3 | **Trịnh Thanh Quang** | 2412862 | quang.trinhthanhcse@hcmut.edu.vn | **A3, B3** | Bộ nhớ vật lý & Phân trang 64-bit 5 cấp (`mm-memphy.c`, `mm64.c`); Sơ đồ 5 cấp, Câu hỏi 4, 5 & 6 |
 | 4 | **Đặng Hồng Anh** | 2410060 | anh.dang2502@hcmut.edu.vn | **A4, B4** | Thư viện `libmem` User-space & Thay trang FIFO (`libmem.c`); Sơ đồ Data Segment, Swap, Câu hỏi 7 |
 | 5 | **Nguyễn Hoàng Quốc Mạnh** | 2111721 | manh.nguyenrynaster01@hcmut.edu.vn | **A5, B5** | Bộ nhớ nhân (`kmalloc`) & Copy User/Kernel (`libmem.c`, `os.c`); Tách không gian User/Kernel, Đồng bộ `kmem` |
-| 6 | **Trần Khan** | 2510102 | khan.tran1507@hcmut.edu.vn | **A6, B6** | Bộ đồng xử lý DMA & Bus (`os.c`, `dma_c_testbench.cpp`, `sysbus.c`); Bất đồng bộ DMA, Bus Addressing |
+| 6 | **Trần Khan** | 2510102 | khan.tran1507@hcmut.edu.vn | **A6, B6** | Bộ đồng xử lý DMA & Bus (`libmem.c`: `libmem_dma_memcpy`, `os.c`, `dma_c_testbench.cpp`, `sysbus.c`, `dpi_rtl.cpp`); Bất đồng bộ DMA, Bus Addressing |
 
 ---
 
@@ -413,8 +413,173 @@ Xét không gian địa chỉ ảo **57 bit** (`PAGING64_CPU_BUS_WIDTH = 57`), k
 ## Phần 6 (B6): Bộ đồng xử lý DMA (Verilator RTL) & Định địa chỉ Bus
 *(Phụ trách: Trần Khan - MSSV: 2510102)*
 
+Bộ đồng xử lý DMA là chip `Vdma_top` do thầy cung cấp sẵn: thiết kế RTL đã được Verilator 5 dịch sang C++ (`src/Vdma_top*.cpp`, `ADDR_WIDTH = 64`, `DATA_WIDTH = 32`). Nhóm viết phần điều khiển còn thiếu và phần tích hợp vào hệ điều hành:
+
+```text
+dma_memcpy (tiến trình) -> libmem_dma_memcpy (CPU: dịch địa chỉ, giao việc) -> hàng đợi DMA
+  -> luồng co_processor -> chip Vdma_top -> bus hệ thống -> RAM (mram->storage)
+  -> dma_done_callback() ("DMA completed")
+```
+
+| File | Vai trò trong đường DMA (phần nhóm viết hoặc sửa) |
+| :--- | :--- |
+| `src/libmem.c` | `libmem_dma_memcpy` (dòng 662), nhóm viết: kiểm tra vùng nhớ, dịch địa chỉ ảo sang vật lý, chia theo trang, giao việc |
+| `src/os.c` | `co_processor` (dòng 122): giữ bước khởi tạo chip có sẵn của thầy, nhóm thêm `dma_serve()`; trong `main`, luồng DMA vẫn được tạo ở chỗ cũ của thầy (dòng 315), nhóm thêm `dma_stop()` và `pthread_join` (dòng 324-325) |
+| `src/dma_c_testbench.cpp` | Nhóm thêm hàng đợi DMA: `dma_submit` (176), `dma_serve` (195), `dma_stop` (213); trong `dpi_dma_copy` (67), nhóm thêm khóa chip, kiểm tra chip đã sẵn sàng, nhánh OS gắn bus vào RAM của hệ điều hành, và kiểm tra phạm vi, chồng lấn; `do_dma` (149) vẫn là hàm của thầy |
+| `src/dpi_rtl.cpp` | Code của thầy: `rtl_dma_init_simulation` (55), `dpi_rtl_dma_copy` (105) (reset, descriptor, `ch_enable`, cấp xung clock tới `ch_done`); nhóm thêm cờ `chip_ready`, ghi trace VCD qua stdio và giới hạn số chu kỳ theo độ dài |
+| `src/sysbus.c` | Nhóm thêm `sysbus_map` (118) và `sysbus_irq_enable` (167), viết lại `dpi_bank_read32_legacy` (135) và `dpi_bank_write32_legacy` (153) để chip đọc/ghi thẳng RAM của hệ điều hành theo từng byte, và chỉ cho `dma_done_callback` (174) báo ở mảnh cuối |
+
+---
+
 ### 6.1. Cơ chế Hoạt động Bất đồng bộ (Asynchronous Operation) giữa CPU và DMA
-*(Phần nội dung chi tiết sẽ do thành viên phụ trách B6 cập nhật)*
+
+#### a) Yêu cầu của đề
+Theo mục 2.3.1 và 2.3.2 của đề, CPU chỉ giao cho bộ điều khiển DMA ba thông tin là **nguồn, đích và kích thước**, rồi quay lại chạy chương trình khác. DMA tự nắm bus hệ thống để chép dữ liệu và **chỉ báo cho CPU khi toàn bộ việc chép đã xong**, giống bước ngắt (bước 4) ở Hình 8.
+
+Lệnh tương ứng của tiến trình là `dma_memcpy [nguồn] [đích] [offset] [kích thước]` (mục 1.3): chép `kích thước` byte từ vùng nhớ `nguồn` sang vùng nhớ `đích`, cùng một `offset` ở hai vùng. Ví dụ `input/proc/m2s` có `dma_memcpy 1 2 0 4`: chép 4 byte đầu của vùng user 1 (cấp bằng `alloc 100 1`) sang vùng kernel 2 (cấp bằng `kmalloc 200 2`).
+
+#### b) Các luồng chạy song song
+
+| Luồng | Tạo ở đâu | Vai trò |
+| :--- | :--- | :--- |
+| `cpu_routine` (mỗi CPU một luồng) | `main` (`src/os.c`) | Chạy tiến trình theo MLQ, mỗi time slot một lệnh |
+| `ld_routine` | `main` | Nạp tiến trình đúng thời điểm |
+| Bộ định thời (timer) | `start_timer()` | Tăng time slot khi mọi CPU và loader xong slot hiện tại |
+| `co_processor` | `main`, **sau** các CPU (giữ đúng thứ tự gốc của thầy) | Khởi tạo chip bằng `rtl_dma_init_simulation()`, rồi phục vụ hàng đợi bằng `dma_serve()` |
+
+Luồng `co_processor` được tạo sau các CPU, nên một tiến trình có thể chạy `dma_memcpy` trước khi chip khởi tạo xong. Khi đó yêu cầu chỉ nằm chờ trong hàng đợi và được chép ngay khi chip sẵn sàng; CPU không phải chờ. Sau khi mọi CPU và loader kết thúc, `main` gọi `dma_stop()` rồi `pthread_join` luồng DMA, nên những yêu cầu còn trong hàng đợi luôn được chép xong trước khi chương trình thoát.
+
+#### c) Ba giai đoạn theo mã nguồn
+
+| Giai đoạn | Luồng | Hàm | Việc làm |
+| :--- | :--- | :--- | :--- |
+| **1. Giao việc** | CPU | `libmem_dma_memcpy` (`src/libmem.c:662`) | Kiểm tra hai vùng nhớ và giới hạn `offset + size`; dịch địa chỉ ảo sang vật lý từng trang; cắt thành các mảnh không vượt ranh giới trang; đưa từng mảnh vào hàng đợi bằng `dma_submit(...)`; **trả về 0 ngay**. CPU chạy tiếp lệnh kế tiếp. |
+| **2. DMA chạy** | `co_processor` | `dma_serve` → `do_dma` → `dpi_dma_copy` → `dpi_rtl_dma_copy` | Lấy mảnh theo thứ tự FIFO. `dpi_dma_copy` khóa bus, kiểm tra chip đã sẵn sàng, phạm vi RAM và chồng lấn, rồi gắn bus vào `mram->storage` (`sysbus_map`). `dpi_rtl_dma_copy` reset chip, ghi descriptor (`desc_data_0` = nguồn, `desc_data_1` = đích, `desc_data_2` = độ dài), bật `ch_enable` và cấp xung clock tới khi `ch_done = 1`. |
+| **3. Báo xong** | `co_processor` | `dma_done_callback` (`src/sysbus.c`) | Chip tự gọi callback ở cạnh lên của `ch_done`; đây là "trình xử lý ngắt" của mô phỏng. Chỉ mảnh **cuối** của mỗi `dma_memcpy` được phép báo (`sysbus_irq_enable`), nên mỗi lệnh được nhận (kích thước > 0) in đúng **một** dòng `DMA completed`, khớp yêu cầu "chỉ báo khi toàn bộ việc chép đã xong". |
+
+Về ngắt: chip có chân `irq = ch_done & intr_en`, nhưng trong bản RTL được cung cấp `intr_en` luôn bằng 0. Vì vậy tín hiệu báo xong dùng được là callback DPI `dma_done_callback()`, được code Verilator sinh ra gọi ở cạnh lên của `ch_done` (`src/Vdma_top___024root__DepSet_hbdce0907__0.cpp:334`).
+
+Tên chân ở Bảng 3 của đề ứng với tên trong `include/Vdma_top.h`: `ch_en` = `ch_enable`, `dat_valid` = `desc_valid`, `dat_ready` = `desc_ready`, `dat_0`..`dat_3` = `desc_data_0`..`desc_data_3`, `ch_xfer_count` = `ch_bytes_transferred`.
+
+#### d) Sơ đồ tuần tự
+
+```text
+ CPU (tiến trình)              Hàng đợi DMA          co_processor + chip           RAM (mram->storage)
+   |                               |                       |                              |
+   | dma_memcpy 1 2 0 4            |                       |                              |
+   | libmem_dma_memcpy:            |                       |                              |
+   |  kiểm tra, dịch địa chỉ       |                       |                              |
+   |  dma_submit(nguồn, đích, 4) ->| đẩy vào cuối hàng     |                              |
+   |<- trả về 0 ngay               |-- đánh thức --------->|                              |
+   | chạy lệnh kế tiếp ...         |                       | dma_serve: lấy mảnh đầu      |
+   |                               |                       | ghi descriptor, ch_enable    |
+   |                               |                       |-- đọc 4 byte nguồn --------->|
+   |                               |                       |-- ghi 4 byte đích ---------->|
+   |                               |                       | ch_done = 1                  |
+   |                               |                       | dma_done_callback():         |
+   |                               |                       |   "DMA completed"            |
+```
+
+#### e) Đồng bộ hóa
+
+| Khóa / cờ | Bảo vệ | Nơi dùng |
+| :--- | :--- | :--- |
+| `kmm_lock` rồi `mmvm_lock` (cùng thứ tự với `__kmalloc`) | Bảng vùng nhớ kernel và `krnl_pgd`; bảng vùng và bảng trang của tiến trình | Suốt lời gọi `libmem_dma_memcpy`: kiểm tra, dịch địa chỉ và đẩy các mảnh vào hàng đợi, nên các mảnh của một lệnh nằm liền nhau trong hàng đợi |
+| `dma_q_lock` và biến điều kiện | Hàng đợi DMA | `dma_submit`, `dma_serve`, `dma_stop` |
+| `dma_lock` | Chip và bus (chip chỉ có một kênh) | `dpi_dma_copy` |
+| `chip_ready` (biến atomic) | Chip đã khởi tạo xong hay chưa | `rtl_dma_init_simulation`, `dpi_dma_copy` |
+
+Luồng DMA không bao giờ lấy `kmm_lock` hay `mmvm_lock`, còn CPU chỉ lấy `dma_q_lock` một thoáng khi đẩy yêu cầu, nên không có vòng chờ giữa hai bên.
+
+#### f) Kết quả chạy và diễn giải
+Trích output của `os_2_singleCPU_mlq_paging` (bản chạy thử có ánh xạ trang cho `alloc`, xem ghi chú bên dưới), mỗi dòng `->` là chú thích của nhóm:
+
+```text
+Time slot  23
+	CPU 0: Processed  5 has finished
+	CPU 0: Dispatched process  4
+   -> PID 4 chạy dma_memcpy 1 2 0 4: yêu cầu vào hàng đợi khi chip chưa khởi tạo xong
+Initialized dma_rtl simulation
+DMA completed
+   -> chip vừa sẵn sàng là chép ngay 4 byte đang chờ
+...
+Time slot  34
+	CPU 0: Put process  3 to run queue
+	CPU 0: Dispatched process  2
+   -> PID 2 chạy dma_memcpy 1 2 0 4
+Time slot  35
+DMA completed
+   -> CPU đã sang slot 35 trước khi chip báo chép xong
+```
+
+- Lệnh `dma_memcpy` trả về ngay, CPU không đứng chờ: dòng `Time slot 35` xuất hiện **trước** dòng `DMA completed` của PID 2.
+- Yêu cầu gửi trước khi chip sẵn sàng không bị mất (PID 4): hàng đợi giữ nó cho tới khi chip khởi tạo xong.
+- Mỗi lệnh `dma_memcpy` được nhận (kích thước > 0) in đúng một dòng `DMA completed`; dữ liệu ở đích sau khi chép trùng với nguồn.
+- Vị trí của dòng `Initialized dma_rtl simulation` thay đổi giữa các lần chạy, vì luồng DMA khởi tạo song song với các CPU; đề cho phép kết quả khác output mẫu nếu giải thích được (mục 2.4).
+
+Ghi chú: lần chạy trên dùng một bản ánh xạ trang thử cho `alloc`, điền RAM ngẫu nhiên và in thêm địa chỉ ảo → vật lý của từng mảnh (các dòng in thêm đã lược khỏi trích đoạn; số liệu ở bảng mục 6.2.c lấy từ đó). Khi `alloc` chưa ánh xạ trang thật cho vùng user (`inc_vma_limit`/`__sys_memmap`, phần A2, chưa hoàn thiện), cùng chương trình in `dma_memcpy: page not in RAM: region 1, offset 0` và không chép gì. Phía kernel không phụ thuộc A2: chép giữa hai vùng `kmalloc` (ví dụ `kmalloc 9000 2`, `kmalloc 5000 4`, `dma_memcpy 2 4 1000 4000`) chạy được với code hiện tại và in đúng một dòng `DMA completed`.
+
+Nhóm còn kiểm thử riêng phần DMA bằng một chương trình gọi thẳng `libmem_dma_memcpy` với chip Verilator thật, rồi so từng byte của RAM với một mô hình tham chiếu do chương trình kiểm thử tự tính từ bảng frame của từng vùng:
+- 16 lệnh hợp lệ có dữ liệu (vượt trang ở nguồn, ở đích, user↔kernel, kernel↔kernel, đúng mép vùng) chép đúng, mỗi lệnh báo xong một lần; 2 lệnh hợp lệ có `size = 0` không chép và không báo;
+- 12 lệnh sai (vùng chưa cấp phát, vượt giới hạn, trang không có trong RAM, vùng `kmalloc` của tiến trình khác) bị từ chối và không ghi gì;
+- 4 luồng gửi đồng thời 1200 lệnh ngẫu nhiên (868 lệnh hợp lệ được chép) mà RAM vẫn đúng; AddressSanitizer và UndefinedBehaviorSanitizer không báo lỗi; ThreadSanitizer chỉ báo một race có sẵn bên trong thư viện Verilator 5.032 (`Verilated::lastContextp`, lúc chip tạo thread pool), không có race nào trong mã DMA.
+
+#### g) Giới hạn hiện tại
+- Tiến trình **không bị dừng** trong lúc DMA chép: lệnh `dma_memcpy` chiếm một time slot như mọi lệnh khác, giống output mẫu. Chip chép nằm ngoài `kmm_lock` và `mmvm_lock`, nên trước khi có `DMA completed` chương trình không được ghi vào vùng nguồn, không được đọc hay ghi vùng đích (cả vùng user lẫn vùng `kmalloc`), và không được giải phóng hai vùng đó.
+- Frame của vùng đang chép **không được ghim**: khi nhóm có thay trang, `find_victim_page` phải bỏ qua các trang đang có DMA.
+
+---
 
 ### 6.2. Định địa chỉ Bus (Bus Addressing): CPU qua MMU vs. DMA truy cập trực tiếp RAM
-*(Phần nội dung chi tiết sẽ do thành viên phụ trách B6 cập nhật)*
+
+Ý chính: **CPU và DMA cùng đọc ghi một RAM vật lý (`mram->storage`), nhưng đi bằng hai đường khác nhau.** CPU dùng địa chỉ ảo và phải qua MMU; DMA chỉ hiểu địa chỉ vật lý (địa chỉ bus) và đi thẳng tới RAM.
+
+#### a) CPU truy cập bộ nhớ qua MMU
+Khi tiến trình chạy lệnh `read`/`write`, CPU chỉ biết địa chỉ ảo của tiến trình:
+1. `__read`/`__write` lấy vùng nhớ trong `symrgtbl`, tính địa chỉ ảo `rg_start + offset`.
+2. `pg_getval`/`pg_setval` gọi `pg_getpage`: tra PTE trong bảng trang của tiến trình; nếu trang không có trong RAM thì phải đưa trang vào trước (page fault).
+3. Từ PTE lấy số khung trang `fpn`, tính địa chỉ vật lý `fpn × kích thước trang + offset trong trang`.
+4. Đọc/ghi **1 byte** ở `mram->storage` qua syscall 17 (`SYSMEM_IO_READ` / `SYSMEM_IO_WRITE`).
+
+Đây là đường đi theo thiết kế của đề; phần hiện thực `pg_getpage` và `pg_getval`/`pg_setval` thuộc A4 (Phần 4). DMA không dùng hai hàm đọc/ghi từng byte này: nó chỉ lấy `fpn` qua `pg_getpage`/`pte_get_entry` rồi tự tính địa chỉ với trang 4 KB.
+
+Mỗi tiến trình chỉ thấy vùng nhớ của mình; lệnh `read`/`write` không chạm được vùng kernel.
+
+#### b) DMA truy cập trực tiếp `mram->storage`
+DMA không có MMU và không biết bảng trang của tiến trình nào. Descriptor chỉ chứa ba số: **địa chỉ vật lý nguồn, địa chỉ vật lý đích và độ dài**; hai địa chỉ tính từ đầu RAM.
+- Trước mỗi lần chép, `dpi_dma_copy` gọi `sysbus_map(mram->storage, maxsz, nguồn, đích, độ dài)`: địa chỉ bus 0 là byte đầu của RAM của hệ điều hành.
+- Chip đọc/ghi qua hai callback DPI `dpi_bank_read32_legacy` và `dpi_bank_write32_legacy`, mỗi lần một từ 32 bit (`DATA_WIDTH = 32`). Bus ghép (khi đọc) và tách (khi ghi) từ 32 bit đó **theo từng byte** như đề khuyến khích (mục 2.3.2), nên thứ tự byte không phụ thuộc máy chạy.
+- Bus chỉ cho đọc các byte trong `[nguồn, nguồn + độ dài)` và `[đích, đích + độ dài)`, chỉ cho ghi trong `[đích, đích + độ dài)`; các byte khác đọc ra 0. Vì vậy từ 32 bit cuối cùng nhô ra ngoài vùng chép cũng không đọc hay ghi nhầm sang dữ liệu của tiến trình khác.
+
+#### c) Dịch địa chỉ trước khi giao việc
+Vì chip không tự dịch được địa chỉ, `libmem_dma_memcpy` làm việc này thay cho nó, **một lần trước khi giao việc**:
+- **Vùng user** (cấp bằng `alloc`): tra bảng trang của tiến trình bằng `pg_getpage`, bắt buộc trang phải có trong RAM, rồi `địa chỉ vật lý = fpn × 4096 + (địa chỉ ảo mod 4096)`.
+- **Vùng kernel** (cấp bằng `kmalloc`, chỉ của chính tiến trình đó): tra bảng trang kernel `krnl_pgd` bằng `kmem_va2pa`. Vùng `kmalloc` liên tục về mặt vật lý (đề mục 1.3); code vẫn cắt theo trang 4 KB như vùng user để dùng chung một cách dịch địa chỉ, nên một lệnh dài có thể thành vài descriptor liên tiếp.
+- Vùng user liên tục về địa chỉ ảo nhưng các trang có thể nằm rải rác trên RAM. Vì vậy mỗi lệnh được cắt thành các mảnh nằm gọn trong một trang 4 KB ở **cả nguồn lẫn đích**; mỗi mảnh là một descriptor.
+- Lượt kiểm tra chạy trước lượt giao việc: nếu có một trang không dùng được thì không mảnh nào được giao, tránh chép dở.
+- **Quy tắc tra số hiệu vùng:** `rgid` trước hết được tra trong bảng vùng user của tiến trình (`caller->mm->symrgtbl`); chỉ khi vùng user đó chưa cấp phát (hoặc đã `free`) mới tra vùng `kmalloc` của chính tiến trình đó (`kmem_find_rg(pid, rgid)`). Vì vậy nếu một chương trình dùng cùng số hiệu cho `alloc` và `kmalloc`, vùng user được ưu tiên; vùng `kmalloc` của tiến trình khác không bao giờ tra tới được.
+
+Ví dụ thực tế (lần chạy ở mục 6.1.f):
+
+| Tiến trình | Phía | Vùng | Địa chỉ ảo | Bảng trang | Địa chỉ vật lý (bus) |
+| :-: | :--- | :--- | :-: | :--- | :-: |
+| PID 2 | nguồn | user 1 | 300 | bảng trang của PID 2 → frame 0 | 300 |
+| PID 2 | đích | kernel 2 | 4096 | `krnl_pgd` → frame 1 | 4096 |
+| PID 4 | nguồn | user 1 | 300 | bảng trang của PID 4 → frame 2 | 8492 |
+| PID 4 | đích | kernel 2 | 8192 | `krnl_pgd` → frame 3 | 12288 |
+
+Hai tiến trình có cùng địa chỉ ảo 300 cho vùng 1 nhưng hai địa chỉ vật lý khác nhau (300 và 8492): DMA chép đúng chỗ vì nó chỉ nhận địa chỉ vật lý đã được dịch theo đúng bảng trang của từng tiến trình.
+
+#### d) So sánh hai đường truy cập
+
+| | CPU (qua MMU) | DMA (trực tiếp qua bus) |
+| :--- | :--- | :--- |
+| Loại địa chỉ | Địa chỉ ảo của tiến trình | Địa chỉ vật lý (offset trong RAM) |
+| Ai dịch địa chỉ | `pg_getpage` và bảng trang, ở **mỗi** lần truy cập | `libmem_dma_memcpy`, **một lần** trước khi giao việc |
+| Đơn vị mỗi lần truy cập | 1 byte (`MEMPHY_read` / `MEMPHY_write`) | 1 từ 32 bit trên bus, tách thành từng byte |
+| Trang không có trong RAM | Phải đưa trang vào RAM trước khi truy cập (page fault, phần A4) | Không tự xử lý được: trang phải có sẵn trong RAM trước khi giao việc |
+| Bảo vệ bộ nhớ | Tiến trình chỉ thấy vùng của mình | Chép được mọi chỗ trong RAM, nên tiến trình chỉ đưa số hiệu vùng; địa chỉ vật lý do `libmem_dma_memcpy` tính và kiểm tra |
+| CPU có phải chờ không | Có, mỗi byte là một lần truy cập | Không, CPU chỉ giao việc rồi chạy tiếp |
+
+#### e) Liên hệ với bố cục bộ nhớ của nhóm
+Nhóm chọn bố cục vùng nhớ ảo kiểu macOS (Phụ lục B của đề). Bố cục này chỉ quyết định **địa chỉ ảo** của từng vùng, còn DMA chỉ thấy **địa chỉ vật lý**, nên phần DMA và bus không phải sửa theo bố cục. Chỗ duy nhất phụ thuộc là bước dịch địa chỉ trong `libmem_dma_memcpy`, vốn dùng chung bảng trang với CPU. Code hiện tại chưa hiện thực bố cục này: trong lần chạy ở mục 6.1.f vùng heap vẫn bắt đầu từ địa chỉ ảo 0 (bản ánh xạ thử), nên khi có bố cục macOS các địa chỉ ảo ở bảng mục 6.2.c sẽ khác, còn cách dịch sang địa chỉ bus thì không đổi.
