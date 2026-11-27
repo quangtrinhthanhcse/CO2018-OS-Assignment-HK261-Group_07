@@ -477,32 +477,43 @@ Tên chân ở Bảng 3 của đề ứng với tên trong `include/Vdma_top.h`:
 Luồng DMA không bao giờ lấy `kmm_lock` hay `mmvm_lock`, còn CPU chỉ lấy `dma_q_lock` một thoáng khi đẩy yêu cầu, nên không có vòng chờ giữa hai bên.
 
 #### f) Kết quả chạy và diễn giải
-Trích output của `os_2_singleCPU_mlq_paging` (bản chạy thử có ánh xạ trang cho `alloc`, xem ghi chú bên dưới), mỗi dòng `->` là chú thích của nhóm:
+Trích output của `os_2_singleCPU_mlq_paging` chạy bằng code trên `main` (lần thứ 5 trong 5 lần chạy, xem ghi chú bên dưới), mỗi dòng `->` là chú thích của nhóm:
 
 ```text
-Time slot  23
+Time slot  24
 	CPU 0: Processed  5 has finished
 	CPU 0: Dispatched process  4
-   -> PID 4 chạy dma_memcpy 1 2 0 4: yêu cầu vào hàng đợi khi chip chưa khởi tạo xong
-Initialized dma_rtl simulation
-DMA completed
-   -> chip vừa sẵn sàng là chép ngay 4 byte đang chờ
+   -> PID 4 chạy dma_memcpy 1 2 0 4: mảnh 4 byte vào hàng đợi khi chip chưa khởi tạo xong
+Time slot  25
 ...
-Time slot  34
+Time slot  31
+	CPU 0: Processed  4 has finished
+   -> PID 4 đã chạy hết chương trình, mảnh của nó vẫn nằm trong hàng đợi
+...
+Time slot  35
 	CPU 0: Put process  3 to run queue
 	CPU 0: Dispatched process  2
-   -> PID 2 chạy dma_memcpy 1 2 0 4
-Time slot  35
+   -> PID 2 chạy dma_memcpy 1 2 0 4: thêm một mảnh vào hàng đợi
+...
+Time slot  43
+	CPU 0: Put process  2 to run queue
+	CPU 0: Dispatched process  1
+Initialized dma_rtl simulation
+Time slot  44
+	CPU 0: Processed  1 has finished
+	CPU 0: Dispatched process  3
 DMA completed
-   -> CPU đã sang slot 35 trước khi chip báo chép xong
+Time slot  45
+DMA completed
+   -> chip vừa sẵn sàng là chép lần lượt hai mảnh đang chờ, CPU vẫn lập lịch tiếp
 ```
 
-- Lệnh `dma_memcpy` trả về ngay, CPU không đứng chờ: dòng `Time slot 35` xuất hiện **trước** dòng `DMA completed` của PID 2.
-- Yêu cầu gửi trước khi chip sẵn sàng không bị mất (PID 4): hàng đợi giữ nó cho tới khi chip khởi tạo xong.
-- Mỗi lệnh `dma_memcpy` được nhận (kích thước > 0) in đúng một dòng `DMA completed`; dữ liệu ở đích sau khi chép trùng với nguồn.
-- Vị trí của dòng `Initialized dma_rtl simulation` thay đổi giữa các lần chạy, vì luồng DMA khởi tạo song song với các CPU; đề cho phép kết quả khác output mẫu nếu giải thích được (mục 2.4).
+- Lệnh `dma_memcpy` trả về ngay, CPU không đứng chờ: PID 4 giao việc ở slot 24 rồi chạy tiếp tới hết chương trình ở slot 31, còn dòng `DMA completed` đầu tiên tới slot 44 mới xuất hiện.
+- Yêu cầu gửi trước khi chip sẵn sàng không bị mất: cả hai mảnh nằm chờ trong hàng đợi tới khi chip khởi tạo xong ở slot 43, rồi được chép lần lượt theo thứ tự đã gửi.
+- Mỗi lệnh `dma_memcpy` được nhận (kích thước > 0) in đúng một dòng `DMA completed`: 2 lệnh cho đúng 2 dòng ở cả 5 lần chạy, không có dòng báo lỗi `dma_memcpy:` nào.
+- Luồng `co_processor` được tạo sau các CPU (giữ đúng thứ tự gốc của thầy) và việc dựng mô hình Verilator chậm hơn nhiều so với một time slot, nên ở cả 5 lần chạy chip chỉ sẵn sàng sau khi hai mảnh đã vào hàng đợi. Ở 3 lần, dòng `Initialized dma_rtl simulation` còn in sau `CPU 0 stopped`; khi đó hai mảnh được chép lúc `main` xả hàng đợi trước khi thoát (`dma_stop()` rồi `pthread_join`). Vị trí dòng này thay đổi giữa các lần chạy; đề cho phép kết quả khác output mẫu nếu giải thích được (mục 2.4).
 
-Ghi chú: lần chạy trên dùng một bản ánh xạ trang thử cho `alloc`, điền RAM ngẫu nhiên và in thêm địa chỉ ảo → vật lý của từng mảnh (các dòng in thêm đã lược khỏi trích đoạn; số liệu ở bảng mục 6.2.c lấy từ đó). Khi `alloc` chưa ánh xạ trang thật cho vùng user (`inc_vma_limit`/`__sys_memmap`, phần A2, chưa hoàn thiện), cùng chương trình in `dma_memcpy: page not in RAM: region 1, offset 0` và không chép gì. Phía kernel không phụ thuộc A2: chép giữa hai vùng `kmalloc` (ví dụ `kmalloc 9000 2`, `kmalloc 5000 4`, `dma_memcpy 2 4 1000 4000`) chạy được với code hiện tại và in đúng một dòng `DMA completed`.
+Ghi chú: lần chạy trên dùng đúng code trên `main`, đã có phần A2 (`inc_vma_limit`, `__sys_memmap`, PR #17), chỉ thêm tạm một dòng `printf` trong `libmem_dma_memcpy` để in địa chỉ ảo → vật lý của từng mảnh. Dòng in thêm đã được lược khỏi trích đoạn; số liệu ở bảng mục 6.2.c lấy từ dòng đó và giống nhau ở cả 5 lần chạy. Trước khi có A2, vùng user chưa được ánh xạ trang nên cùng chương trình chỉ in `dma_memcpy: page not in RAM: region 1, offset 0` và không chép gì.
 
 Nhóm còn kiểm thử riêng phần DMA bằng một chương trình gọi thẳng `libmem_dma_memcpy` với chip Verilator thật, rồi so từng byte của RAM với một mô hình tham chiếu do chương trình kiểm thử tự tính từ bảng frame của từng vùng:
 - 16 lệnh hợp lệ có dữ liệu (vượt trang ở nguồn, ở đích, user↔kernel, kernel↔kernel, đúng mép vùng) chép đúng, mỗi lệnh báo xong một lần; 2 lệnh hợp lệ có `size = 0` không chép và không báo;
@@ -510,8 +521,8 @@ Nhóm còn kiểm thử riêng phần DMA bằng một chương trình gọi th�
 - 4 luồng gửi đồng thời 1200 lệnh ngẫu nhiên (868 lệnh hợp lệ được chép) mà RAM vẫn đúng; AddressSanitizer và UndefinedBehaviorSanitizer không báo lỗi; ThreadSanitizer chỉ báo một race có sẵn bên trong thư viện Verilator 5.032 (`Verilated::lastContextp`, lúc chip tạo thread pool), không có race nào trong mã DMA.
 
 #### g) Giới hạn hiện tại
-- Tiến trình **không bị dừng** trong lúc DMA chép: lệnh `dma_memcpy` chiếm một time slot như mọi lệnh khác, giống output mẫu. Chip chép nằm ngoài `kmm_lock` và `mmvm_lock`, nên trước khi có `DMA completed` chương trình không được ghi vào vùng nguồn, không được đọc hay ghi vùng đích (cả vùng user lẫn vùng `kmalloc`), và không được giải phóng hai vùng đó.
-- Frame của vùng đang chép **không được ghim**: khi nhóm có thay trang, `find_victim_page` phải bỏ qua các trang đang có DMA.
+- Tiến trình **không bị dừng** trong lúc DMA chép: lệnh `dma_memcpy` chiếm một time slot như mọi lệnh khác, giống output mẫu. Chip chép nằm ngoài `kmm_lock` và `mmvm_lock`, nên trước khi có `DMA completed` chương trình không được ghi vào vùng nguồn, không được đọc hay ghi vùng đích (cả vùng user lẫn vùng `kmalloc`), và không được giải phóng hai vùng đó. Lần chạy ở mục f cho thấy chuyện này xảy ra thật: PID 4 chạy `free 1` (vùng nguồn của mảnh) và kết thúc trước khi chip chép. Lần đó dữ liệu chưa sai, vì `free` chỉ trả vùng địa chỉ ảo về danh sách trống, còn frame vật lý vẫn thuộc tiến trình kể cả sau khi tiến trình kết thúc (`free_pcb_memph` không được gọi), nên chip vẫn chép giữa đúng hai frame cũ.
+- Frame của vùng đang chép **không được ghim**. `pg_getpage` (A4) đã có bước đẩy trang nạn nhân FIFO ra swap và nạp lại trang từ swap, nhưng trên `main` chưa có bước nào đưa trang ra swap khi RAM hết frame trống (`alloc_pages_range` trả lỗi thay vì chọn trang nạn nhân), nên chưa trang nào thực sự bị thay: nhóm đếm số lần vào nhánh swap của `pg_getpage` ở 4 test `os_1_mlq_paging`, `os_1_singleCPU_mlq_paging`, `os_1_mlq_paging_small_4K` (RAM chỉ có 1 frame) và `os_2_mlq_paging`, đều bằng 0. Khi bước thay trang lúc cấp phát được nối vào, một trang đang chờ DMA có thể bị đẩy ra swap và frame của nó được giao cho trang khác, làm chip chép vào frame đã đổi chủ. Khi đó phải đánh dấu các trang đang có DMA và bỏ qua chúng lúc chọn nạn nhân cho tới khi có `DMA completed`.
 
 ---
 
@@ -571,4 +582,4 @@ Hai tiến trình có cùng địa chỉ ảo 300 cho vùng 1 nhưng hai địa 
 | CPU có phải chờ không | Có, mỗi byte là một lần truy cập | Không, CPU chỉ giao việc rồi chạy tiếp |
 
 #### e) Liên hệ với bố cục bộ nhớ của nhóm
-Nhóm chọn bố cục vùng nhớ ảo kiểu macOS (Phụ lục B của đề). Bố cục này chỉ quyết định **địa chỉ ảo** của từng vùng, còn DMA chỉ thấy **địa chỉ vật lý**, nên phần DMA và bus không phải sửa theo bố cục. Chỗ duy nhất phụ thuộc là bước dịch địa chỉ trong `libmem_dma_memcpy`, vốn dùng chung bảng trang với CPU. Code hiện tại chưa hiện thực bố cục này: trong lần chạy ở mục 6.1.f vùng heap vẫn bắt đầu từ địa chỉ ảo 0 (bản ánh xạ thử), nên khi có bố cục macOS các địa chỉ ảo ở bảng mục 6.2.c sẽ khác, còn cách dịch sang địa chỉ bus thì không đổi.
+Nhóm chọn bố cục vùng nhớ ảo kiểu macOS (Phụ lục B của đề). Bố cục này chỉ quyết định **địa chỉ ảo** của từng vùng, còn DMA chỉ thấy **địa chỉ vật lý**, nên phần DMA và bus không phải sửa theo bố cục. Chỗ duy nhất phụ thuộc là bước dịch địa chỉ trong `libmem_dma_memcpy`, vốn dùng chung bảng trang với CPU. Code hiện tại chưa hiện thực bố cục này: trong lần chạy ở mục 6.1.f vùng heap vẫn bắt đầu từ địa chỉ ảo 0 và lớn dần lên (vùng 0 của m2s ở [0, 300), vùng 1 ở [300, 400)), nên khi có bố cục macOS các địa chỉ ảo ở bảng mục 6.2.c sẽ khác, còn cách dịch sang địa chỉ bus thì không đổi.
