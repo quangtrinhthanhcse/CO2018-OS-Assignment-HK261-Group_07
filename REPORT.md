@@ -413,13 +413,11 @@ Xét không gian địa chỉ ảo **57 bit** (`PAGING64_CPU_BUS_WIDTH = 57`), k
 ## Phần 6 (B6): Bộ đồng xử lý DMA (Verilator RTL) & Định địa chỉ Bus
 *(Phụ trách: Trần Khan - MSSV: 2510102)*
 
-Bộ đồng xử lý DMA là chip `Vdma_top` do thầy cung cấp sẵn: thiết kế RTL đã được Verilator 5 dịch sang C++ (`src/Vdma_top*.cpp`, `ADDR_WIDTH = 64`, `DATA_WIDTH = 32`). Nhóm viết phần điều khiển còn thiếu và phần tích hợp vào hệ điều hành:
+Bộ đồng xử lý DMA là chip `Vdma_top` do thầy cung cấp sẵn: thiết kế RTL đã được Verilator 5 dịch sang C++ (`src/Vdma_top*.cpp`, `ADDR_WIDTH = 64`, `DATA_WIDTH = 32`). Nhóm viết phần điều khiển còn thiếu và phần tích hợp vào hệ điều hành (Hình 6.1):
 
-```text
-dma_memcpy (tiến trình) -> libmem_dma_memcpy (CPU: dịch địa chỉ, giao việc) -> hàng đợi DMA
-  -> luồng co_processor -> chip Vdma_top -> bus hệ thống -> RAM (mram->storage)
-  -> dma_done_callback() ("DMA completed")
-```
+![Hình 6.1: luồng CPU chạy libmem_dma_memcpy rồi đẩy yêu cầu vào hàng đợi DMA và trả về 0; luồng co_processor lấy yêu cầu qua dpi_dma_copy, nạp descriptor cho chip Vdma_top, chip đọc ghi RAM vật lý qua bus hệ thống và gọi dma_done_callback khi ch_done lên 1](docs/figures/b6-dma-path.png)
+
+*Hình 6.1. Đường đi của một lệnh `dma_memcpy`. Khung trái là việc chạy trên luồng CPU, khung phải là việc chạy trên luồng `co_processor`; hai luồng chỉ gặp nhau ở hàng đợi DMA.*
 
 | File | Vai trò trong đường DMA (phần nhóm viết hoặc sửa) |
 | :--- | :--- |
@@ -463,22 +461,9 @@ Tên chân ở Bảng 3 của đề ứng với tên trong `include/Vdma_top.h`:
 
 #### d) Sơ đồ tuần tự
 
-```text
- CPU (tiến trình)              Hàng đợi DMA          co_processor + chip           RAM (mram->storage)
-   |                               |                       |                              |
-   | dma_memcpy 1 2 0 4            |                       |                              |
-   | libmem_dma_memcpy:            |                       |                              |
-   |  kiểm tra, dịch địa chỉ       |                       |                              |
-   |  dma_submit(nguồn, đích, 4) ->| đẩy vào cuối hàng     |                              |
-   |<- trả về 0 ngay               |-- đánh thức --------->|                              |
-   | chạy lệnh kế tiếp ...         |                       | dma_serve: lấy mảnh đầu      |
-   |                               |                       | ghi descriptor, ch_enable    |
-   |                               |                       |-- đọc 4 byte nguồn --------->|
-   |                               |                       |-- ghi 4 byte đích ---------->|
-   |                               |                       | ch_done = 1                  |
-   |                               |                       | dma_done_callback():         |
-   |                               |                       |   "DMA completed"            |
-```
+![Hình 6.2: CPU dịch địa chỉ, gọi dma_submit, đánh thức luồng DMA và nhận kết quả trả về ngay rồi chạy lệnh kế tiếp; luồng DMA nạp descriptor cho chip; chip lặp đọc và ghi từng từ 32 bit qua bus tới khi chép đủ; chỉ mảnh cuối (last = 1) in DMA completed; chip trả ch_done cho luồng DMA](docs/figures/b6-dma-sequence.png)
+
+*Hình 6.2. Một mảnh của lệnh `dma_memcpy 1 2 0 4` theo thời gian (đi từ trên xuống). CPU đã chạy lệnh kế tiếp trong khi chip còn đang chép; dòng `DMA completed` chỉ được in ở mảnh cuối của lệnh.*
 
 #### e) Đồng bộ hóa
 
@@ -533,6 +518,10 @@ Nhóm còn kiểm thử riêng phần DMA bằng một chương trình gọi th�
 ### 6.2. Định địa chỉ Bus (Bus Addressing): CPU qua MMU vs. DMA truy cập trực tiếp RAM
 
 Ý chính: **CPU và DMA cùng đọc ghi một RAM vật lý (`mram->storage`), nhưng đi bằng hai đường khác nhau.** CPU dùng địa chỉ ảo và phải qua MMU; DMA chỉ hiểu địa chỉ vật lý (địa chỉ bus) và đi thẳng tới RAM.
+
+![Hình 6.3: bên trái, lệnh read/write của CPU dùng địa chỉ ảo, tra bảng trang của tiến trình để có địa chỉ vật lý rồi đọc ghi 1 byte qua MEMPHY; bên phải, lệnh dma_memcpy chỉ đưa số hiệu vùng, libmem_dma_memcpy tra bảng trang một lần để có địa chỉ vật lý nguồn và đích, chip Vdma_top cùng sysbus chép từng byte; cả hai cùng tới RAM vật lý mram->storage](docs/figures/b6-bus-addressing.png)
+
+*Hình 6.3. Hai đường tới cùng một RAM. CPU dịch địa chỉ ở mỗi lần truy cập; DMA chỉ nhận địa chỉ vật lý đã được `libmem_dma_memcpy` dịch một lần trước khi giao việc. Mũi tên nét đứt: với vùng user, bước dịch này tra chính bảng trang mà CPU dùng; vùng `kmalloc` thì tra `krnl_pgd` bằng `kmem_va2pa` (mục c).*
 
 #### a) CPU truy cập bộ nhớ qua MMU
 Khi tiến trình chạy lệnh `read`/`write`, CPU chỉ biết địa chỉ ảo của tiến trình:
